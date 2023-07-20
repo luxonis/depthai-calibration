@@ -111,8 +111,8 @@ class StereoCalibration(object):
 
         # parameters = aruco.DetectorParameters_create()
         assert mrk_size != None,  "ERROR: marker size not set"
+        combinedCoverageImage = None
         for camera in board_config['cameras'].keys():
-            combinedCoverageImage = None
             cam_info = board_config['cameras'][camera]
             print(
                 '<------------Calibrating {} ------------>'.format(cam_info['name']))
@@ -136,15 +136,17 @@ class StereoCalibration(object):
             # coverageImages[coverage_name] = coverageImage
             coverage_file_path = filepath + '/' + coverage_name + '_coverage.png'
             cv2.imwrite(coverage_file_path, coverageImage)
-            if combinedCoverageImage is None:
-                combinedCoverageImage = coverageImage
-            else:
-                combinedCoverageImage = np.hstack((combinedCoverageImage, coverageImage))            
+            # if combinedCoverageImage is None:
+            #     combinedCoverageImage = coverageImage
+            # else:
+            #     print('stacking coverage images')
+            #     combinedCoverageImage.shape
+            #     combinedCoverageImage = np.hstack((combinedCoverageImage, coverageImage))            
 
-        combinedCoverageImage = cv2.resize(combinedCoverageImage, (0, 0), fx=0.7, fy=0.7)
-        cv2.imshow('coverage image', combinedCoverageImage)
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
+            coverageImage = cv2.resize(coverageImage, (0, 0), fx=0.7, fy=0.7)
+            cv2.imshow('coverage image', coverageImage)
+            cv2.waitKey(0)
+            cv2.destroyAllWindows()
         
         for camera in board_config['cameras'].keys():
             left_cam_info = board_config['cameras'][camera]
@@ -277,30 +279,41 @@ class StereoCalibration(object):
                 gray, self.aruco_dictionary)
             marker_corners, ids, refusd, recoverd = cv2.aruco.refineDetectedMarkers(gray, self.board,
                                                                                     marker_corners, ids, rejectedCorners=rejectedImgPoints)
-            if self.traceLevel == 1 or self.traceLevel == 10:
+            if self.traceLevel == 3 or self.traceLevel == 10:
                 print('{0} number of Markers corners detected in the image {1}'.format(
                     len(marker_corners), img_pth.name))
             if len(marker_corners) > 0:
-                res2 = cv2.aruco.interpolateCornersCharuco(
+                ret, charuco_corners, charuco_ids  = cv2.aruco.interpolateCornersCharuco(
                     marker_corners, ids, gray, self.board)
 
-                # if res2[1] is not None and res2[2] is not None and len(res2[1])>3 and decimator%1==0:
-                if res2[1] is not None and res2[2] is not None and len(res2[1]) > 3:
+                # if charuco_corners is not None and charuco_ids is not None and len(charuco_corners)>3 and decimator%1==0:
+                if charuco_corners is not None and charuco_ids is not None and len(charuco_corners) > 3:
 
-                    cv2.cornerSubPix(gray, res2[1],
+                    cv2.cornerSubPix(gray, charuco_corners,
                                      winSize=(5, 5),
                                      zeroZone=(-1, -1),
                                      criteria=criteria)
-                    allCorners.append(res2[1])  # Charco chess corners
-                    allIds.append(res2[2])  # charuco chess corner id's
+                    allCorners.append(charuco_corners)  # Charco chess corners
+                    allIds.append(charuco_ids)  # charuco chess corner id's
                     all_marker_corners.append(marker_corners)
                     all_marker_ids.append(ids)
-                    all_recovered.append(recoverd)
+                    # all_recovered.append(recoverd)
                 else:
                     raise RuntimeError("Failed to detect markers in the image")
             else:
                 print(im + " Not found")
                 raise RuntimeError("Failed to detect markers in the image")
+            if self.traceLevel == 3 or self.traceLevel == 10:
+                rgb_img = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+                cv2.aruco.drawDetectedMarkers(rgb_img, marker_corners, ids, (0, 0, 255))
+                cv2.aruco.drawDetectedCornersCharuco(rgb_img, charuco_corners, charuco_ids, (0, 255, 0))
+
+                if rgb_img.shape[1] > 1920:
+                    rgb_img = cv2.resize(rgb_img, (0, 0), fx=0.7, fy=0.7)
+                cv2.imshow('marker frame', rgb_img)
+                cv2.waitKey(0)
+                cv2.destroyAllWindows()
+
 
         # imsize = gray.shape[::-1]
         return allCorners, allIds, all_marker_corners, all_marker_ids, gray.shape[::-1], all_recovered
@@ -322,7 +335,7 @@ class StereoCalibration(object):
                 allCorners, allIds, imsize, hfov)
             # (Height, width)
             if self.traceLevel == 3 or self.traceLevel == 10:
-                self.fisheye_undistort_visualizaation(
+                self.undistort_visualization(
                     image_files, camera_matrix, distortion_coefficients, imsize)
 
             return ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, imsize, coverageImage
@@ -331,7 +344,7 @@ class StereoCalibration(object):
             ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors = self.calibrate_fisheye(
                 allCorners, allIds, imsize)
             if self.traceLevel == 3 or self.traceLevel == 10:
-                self.fisheye_undistort_visualizaation(
+                self.undistort_visualization(
                     image_files, camera_matrix, distortion_coefficients, imsize)
             print('Fisheye rotation vector', rotation_vectors[0])
             print('Fisheye translation vector', translation_vectors[0])
@@ -424,7 +437,7 @@ class StereoCalibration(object):
 
         return scaled_intrinsics
 
-    def fisheye_undistort_visualizaation(self, img_list, K, D, img_size):
+    def undistort_visualization(self, img_list, K, D, img_size):
         for im in img_list:
             # print(im)
             img = cv2.imread(im)
@@ -1107,7 +1120,8 @@ class StereoCalibration(object):
             marker_corners_r, ids_r, _, _ = cv2.aruco.refineDetectedMarkers(image_data_pair[1], self.board,
                                                                             marker_corners_r, ids_r,
                                                                             rejectedCorners=rejectedImgPoints)
-            print(f'Marekrs length for pair {i} is: L {len(marker_corners_l)} | R {len(marker_corners_r)} ')
+            if self.traceLevel == 4 or self.traceLevel == 10:
+                print(f'Marekrs length for pair {i} is: L {len(marker_corners_l)} | R {len(marker_corners_r)} ')
             #print(f'Marekrs length l is {len(marker_corners_l)}')
             res2_l = cv2.aruco.interpolateCornersCharuco(
                 marker_corners_l, ids_l, image_data_pair[0], self.board)
