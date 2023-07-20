@@ -244,6 +244,7 @@ class StereoCalibration(object):
         criteria = (cv2.TERM_CRITERIA_EPS +
                     cv2.TERM_CRITERIA_MAX_ITER, 10000, 0.00001)
         count = 0
+        skip_vis = False
         for im in images:
             if self.traceLevel == 2 or self.traceLevel == 10:
                 print("=> Processing image {0}".format(im))
@@ -310,8 +311,12 @@ class StereoCalibration(object):
 
                 if rgb_img.shape[1] > 1920:
                     rgb_img = cv2.resize(rgb_img, (0, 0), fx=0.7, fy=0.7)
-                cv2.imshow('marker frame', rgb_img)
-                cv2.waitKey(0)
+                if not skip_vis:
+                    name = img_pth.name + ' - ' + "marker frame"
+                    cv2.imshow(name, rgb_img)
+                    k = cv2.waitKey(0)
+                    if k == 27: # Esc key to skip vis
+                        skip_vis = True
                 cv2.destroyAllWindows()
 
 
