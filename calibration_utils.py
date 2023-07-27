@@ -314,8 +314,7 @@ class StereoCalibration(object):
                 ret, charuco_corners, charuco_ids = cv2.aruco.interpolateCornersCharuco(
                     marker_corners, ids, gray, self.board)
 
-                # if charuco_corners[1] is not None and charuco_corners[2] is not None and len(charuco_corners[1])>3 and decimator%1==0:
-                if charuco_corners is not None and charuco_corners is not None and len(charuco_corners) > 3:
+                if charuco_corners is not None and charuco_ids is not None and len(charuco_corners) > 3:
 
                     cv2.cornerSubPix(gray, charuco_corners,
                                      winSize=(5, 5),
@@ -325,7 +324,6 @@ class StereoCalibration(object):
                     allIds.append(charuco_ids)  # charuco chess corner id's
                     all_marker_corners.append(marker_corners)
                     all_marker_ids.append(ids)
-                    #all_recovered.append(recoverd)
                 else:
                     print(im)
                     raise RuntimeError("Failed to detect markers in the image")
