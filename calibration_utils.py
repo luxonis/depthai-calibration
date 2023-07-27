@@ -169,7 +169,7 @@ class StereoCalibration(object):
             coverage_file_path = filepath + '/' + coverage_name + '_coverage.png'
             cv2.imwrite(coverage_file_path, coverageImage)
 
-        combinedCoverageImage = cv2.resize(combinedCoverageImage, (0, 0), fx=0.45, fy=0.45)
+        combinedCoverageImage = cv2.resize(combinedCoverageImage, (0, 0), fx=self.output_scale_factor, fy=self.output_scale_factor)
         cv2.imshow('coverage image', combinedCoverageImage)
         cv2.waitKey(0)
         cv2.destroyAllWindows()
@@ -310,10 +310,9 @@ class StereoCalibration(object):
                 print('{0} number of Markers corners detected in the image {1}'.format(
                     len(marker_corners), img_pth.name))
             if len(marker_corners) > 0:
-                ret, charuco_corners, charuco_ids  = cv2.aruco.interpolateCornersCharuco(
+                ret, charuco_corners, charuco_ids = cv2.aruco.interpolateCornersCharuco(
                     marker_corners, ids, gray, self.board)
 
-                # if charuco_corners is not None and charuco_ids is not None and len(charuco_corners)>3 and decimator%1==0:
                 if charuco_corners is not None and charuco_ids is not None and len(charuco_corners) > 3:
 
                     cv2.cornerSubPix(gray, charuco_corners,
@@ -324,7 +323,6 @@ class StereoCalibration(object):
                     allIds.append(charuco_ids)  # charuco chess corner id's
                     all_marker_corners.append(marker_corners)
                     all_marker_ids.append(ids)
-                    # all_recovered.append(recoverd)
                 else:
                     print(im)
                     raise RuntimeError("Failed to detect markers in the image")
@@ -345,8 +343,6 @@ class StereoCalibration(object):
                     if k == 27: # Esc key to skip vis
                         skip_vis = True
                 cv2.destroyAllWindows()
-
-
         # imsize = gray.shape[::-1]
         return allCorners, allIds, all_marker_corners, all_marker_ids, gray.shape[::-1], all_recovered
 
