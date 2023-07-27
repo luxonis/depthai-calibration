@@ -322,7 +322,7 @@ class StereoCalibration(object):
                                      zeroZone=(-1, -1),
                                      criteria=criteria)
                     allCorners.append(charuco_corners)  # Charco chess corners
-                    allIds.append(charuco_corners)  # charuco chess corner id's
+                    allIds.append(charuco_ids)  # charuco chess corner id's
                     all_marker_corners.append(marker_corners)
                     all_marker_ids.append(ids)
                     #all_recovered.append(recoverd)
