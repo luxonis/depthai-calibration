@@ -167,7 +167,7 @@ class StereoCalibration(object):
             else:
                 combinedCoverageImage = np.hstack((combinedCoverageImage, subImage))
             coverage_file_path = filepath + '/' + coverage_name + '_coverage.png'
-            cv2.imwrite(coverage_file_path, coverageImage)
+            cv2.imwrite(coverage_file_path, subImage)
 
         combinedCoverageImage = cv2.resize(combinedCoverageImage, (0, 0), fx=self.output_scale_factor, fy=self.output_scale_factor)
         cv2.imshow('coverage image', combinedCoverageImage)
