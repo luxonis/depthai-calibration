@@ -89,6 +89,7 @@ class StereoCalibration(object):
     """Class to Calculate Calibration and Rectify a Stereo Camera."""
 
     def __init__(self):
+        self.traceLevel = 0
         """Class to Calculate Calibration and Rectify a Stereo Camera."""
 
     def calibrate(self, board_config, filepath, square_size, mrk_size, squaresX, squaresY, camera_model, enable_disp_rectify):
