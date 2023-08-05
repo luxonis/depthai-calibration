@@ -172,9 +172,10 @@ class StereoCalibration(object):
             cv2.imwrite(coverage_file_path, subImage)
 
         combinedCoverageImage = cv2.resize(combinedCoverageImage, (0, 0), fx=self.output_scale_factor, fy=self.output_scale_factor)
-        cv2.imshow('coverage image', combinedCoverageImage)
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
+        if enable_disp_rectify:
+            cv2.imshow('coverage image', combinedCoverageImage)
+            cv2.waitKey(0)
+            cv2.destroyAllWindows()
         
         for camera in board_config['cameras'].keys():
             left_cam_info = board_config['cameras'][camera]
