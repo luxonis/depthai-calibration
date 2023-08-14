@@ -379,7 +379,7 @@ class StereoCalibration(object):
         else:
             print('Fisheye--------------------------------------------------')
             ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors = self.calibrate_fisheye(
-                allCorners, allIds, imsize, hfow)
+                allCorners, allIds, imsize, hfov)
             if self.traceLevel == 4 or self.traceLevel == 5 or self.traceLevel == 10:
                 self.undistort_visualization(
                     image_files, camera_matrix, distortion_coefficients, imsize)
@@ -554,7 +554,7 @@ class StereoCalibration(object):
             print(perViewErrors)
         return ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors
 
-    def calibrate_fisheye(self, allCorners, allIds, imsize):
+    def calibrate_fisheye(self, allCorners, allIds, imsize, hfov):
         one_pts = self.board.chessboardCorners
         obj_points = []
         for i in range(len(allIds)):
@@ -562,7 +562,7 @@ class StereoCalibration(object):
             for j in range(len(allIds[i])):
                 obj_pts_sub.append(one_pts[allIds[i][j]])
             obj_points.append(np.array(obj_pts_sub, dtype=np.float32))
-            
+
         # cameraMatrixInit = np.array([[907.84859625,   0.0        , 995.15888273],
         #                              [  0.0       ,  889.29269629, 627.49748034],
         #                              [  0.0       ,    0.0       ,    1.0      ]])
