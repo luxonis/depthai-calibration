@@ -21,3 +21,11 @@ If you just want to update your submodule up to date, use:
 git pull --recurse-submodules
 ```
 
+ ###Instructions on how to integrate this into your calibration routine
+
+ You can use this library to easly calibrate the cameras. The scripts can be integrated by adding 
+ ```python
+ import depthai_calibration.calibration_utils
+ ```
+Example of integration of depthai-calibration submodule can be found in our user calibration script [calibrate.py](https://github.com/luxonis/depthai/blob/main/calibrate.py).
+
