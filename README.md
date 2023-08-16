@@ -1,6 +1,6 @@
 # DepthAI Calibration
 
-This repository contains the calibration scripts for device calibration, which are used in many calibration programs, such as calibrate.py [calibrate.py](https://github.com/luxonis/depthai), [Factory-caibration-DepthAI](https://github.com/luxonis/Factory-calibration-DepthAI) and others.
+This repository contains the calibration scripts for device calibration, which are used in many calibration programs, such as user calibration in [DepthAI](https://github.com/luxonis/depthai) repository, [Factory-caibration-DepthAI](https://github.com/luxonis/Factory-calibration-DepthAI) with RobotArm and others.
 
 ## Instructions
 ### Installing depthaAI-calibration as a submodule
