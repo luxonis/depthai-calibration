@@ -3,7 +3,7 @@
 This repository contains the calibration scripts for device calibration, which are used in many calibration programs, such as user calibration in [DepthAI](https://github.com/luxonis/depthai) repository, [Factory-caibration-DepthAI](https://github.com/luxonis/Factory-calibration-DepthAI) with RobotArm and others.
 
 ## Instructions
-### Installing depthaAI-calibration as a submodule
+### Fetching it as submodule from an exsisting project
 In case your repository should have this submodule and it is not detected in files, add it with:
 ```
 git submodule update --init
