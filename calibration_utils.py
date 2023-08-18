@@ -118,18 +118,19 @@ class StereoCalibration(object):
         assert mrk_size != None,  "ERROR: marker size not set"
         for camera in board_config['cameras'].keys():
             cam_info = board_config['cameras'][camera]
-            images_path = filepath + '/' + cam_info['name']
-            image_files = glob.glob(images_path + "/*")
-            image_files.sort()
-            for im in image_files:
-                frame = cv2.imread(im)
-                height, width, _ = frame.shape
-                widthRatio = resizeWidth / width
-                heightRatio = resizeHeight / height
-                if (widthRatio > 0.8 and heightRatio > 0.8 and widthRatio <= 1.0 and heightRatio <= 1.0) or (widthRatio > 1.2 and heightRatio > 1.2) or (resizeHeight == 0):
-                    resizeWidth = width
-                    resizeHeight = height
-                break
+            if cam_info["name"] not in self.disableCamera:
+                images_path = filepath + '/' + cam_info['name']
+                image_files = glob.glob(images_path + "/*")
+                image_files.sort()
+                for im in image_files:
+                    frame = cv2.imread(im)
+                    height, width, _ = frame.shape
+                    widthRatio = resizeWidth / width
+                    heightRatio = resizeHeight / height
+                    if (widthRatio > 0.8 and heightRatio > 0.8 and widthRatio <= 1.0 and heightRatio <= 1.0) or (widthRatio > 1.2 and heightRatio > 1.2) or (resizeHeight == 0):
+                        resizeWidth = width
+                        resizeHeight = height
+                    break
         for camera in board_config['cameras'].keys():
             cam_info = board_config['cameras'][camera]
             if cam_info["name"] not in self.disableCamera:
