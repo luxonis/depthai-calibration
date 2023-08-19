@@ -20,10 +20,7 @@ import argparse
 from pathlib import Path
 import time
 import traceback
-
-ransacMethod = cv2.RANSAC
-if cv2.__version__ >= "4.5.4":
-    ransacMethod = cv2.USAC_MAGSAC
+from feature_helper import FeaturesHelper, keypoint_to_point2f
 
 epilog_text="Dynamic recalibration."
 parser = argparse.ArgumentParser(
@@ -52,118 +49,32 @@ rgbEnabled = not options.disableRgb
 dryRun = options.dryRun
 debug = options.debug
 
+ransacMethod = cv2.RANSAC
+if cv2.__version__ >= "4.5.4":
+    ransacMethod = cv2.USAC_MAGSAC
 
-sift = cv2.SIFT_create()
-FLANN_INDEX_KDTREE = 1
-index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=5)
-search_params = dict(checks=50)
-flann = cv2.FlannBasedMatcher(index_params, search_params)
-
-def filter_matches(kp_left, kp_right, des_left, des_right, matches, ratio = 0.75, reprojection_threshold = 5.0):
-    # store all the good matches as per Lowe's ratio test.
-    good = []
-    pts_left_filtered = []
-    pts_right_filtered = []
-    kp_left_filtered = []
-    kp_right_filtered = []
-    des_left_filtered =  []
-    des_right_filtered = []
-    for m,n in matches:
-        if m.distance < ratio * n.distance:
-            pts_left_filtered.append(kp_left[m.queryIdx].pt)
-            kp_left_filtered.append(kp_left[m.queryIdx])
-            des_left_filtered.append(des_left[m.queryIdx])
-
-            pts_right_filtered.append(kp_right[m.trainIdx].pt)
-            kp_right_filtered.append(kp_right[m.trainIdx])
-            des_right_filtered.append(des_right[m.trainIdx])
-
-    if len(kp_left_filtered) < 25 or len(kp_right_filtered) < 25:
-        return kp_left_filtered, kp_right_filtered, np.array(des_left_filtered), np.array(des_right_filtered)
-
-    pts_left_filtered = np.float32(pts_left_filtered)
-    pts_right_filtered = np.float32(pts_right_filtered)
-
-
-    # this is just to get inliers
-    M, mask = cv2.findHomography(pts_left_filtered, pts_right_filtered, method=cv2.RANSAC, ransacReprojThreshold=reprojection_threshold)
-    matchesMask = mask.ravel().tolist()
-    for i in reversed(range(len(pts_left_filtered))):
-        if not matchesMask[i]:
-            del kp_left_filtered[i]
-            del kp_right_filtered[i]
-            del des_left_filtered[i]
-            del des_right_filtered[i]
-    return kp_left_filtered, kp_right_filtered, np.array(des_left_filtered), np.array(des_right_filtered)
-
-
-def detect_features(left_image, right_image):
-    kp_left, des_left = sift.detectAndCompute(left_image, None)
-    kp_right, des_right = sift.detectAndCompute(right_image, None)
-
-    if len(kp_left) < 25 or len(kp_right) < 25:
-        return None, None, None, None
-
-    print(f'length of keypoints: {len(kp_left)}, {len(kp_right)}')
-    matches = flann.knnMatch(des_left, des_right, k=2)
-
-    filter_val = 0.6
-    reprojection_threshold = 3.0
-    kp_left_filtered, kp_right_filtered, des_left_filtered, des_right_filtered = filter_matches( kp_left, 
-                    kp_right, 
-                    des_left, 
-                    des_right, 
-                    matches, ratio = filter_val, reprojection_threshold=reprojection_threshold)
-
-    print(f'length of filtered keypoints: {len(kp_left_filtered)}, {len(kp_right_filtered)}')
-
-    if len(kp_left_filtered) < 25 or len(kp_right_filtered) < 25:
-        return None, None, None, None
-    return kp_left_filtered, kp_right_filtered, des_left_filtered, des_right_filtered
-
-def epipolar_calculate(kp_left_filtered, kp_right_filtered, left_undistorted, right_undistorted, size):
-
-    horStack = np.hstack((left_undistorted, right_undistorted))
-    green = (0, 255, 0)
-    red = (0, 0, 255)
-    blue = (255, 0, 0)
-    radius = 2
-    thickness = 1
-    epiploar_error = 0
-
-    for i in range(len(kp_left_filtered)):
-        left_pt = kp_left_filtered[i].pt
-        right_pt = kp_right_filtered[i].pt
-        
-        left_pt_i = (int(left_pt[0]), int(left_pt[1]))
-        right_pt_i = (size[0] + int(right_pt[0]), int(right_pt[1]))
-
-        cv2.circle(horStack, left_pt_i, radius, red, thickness)
-        cv2.circle(horStack, right_pt_i, radius, red, thickness)
-        horStack = cv2.line(horStack, left_pt_i, right_pt_i, green, thickness)
-        epiploar_error += abs(left_pt[1] - right_pt[1])
-    
-    epiploar_error /= len(kp_left_filtered)
-    dest = cv2.resize(horStack, (0, 0), fx = 0.5, fy= 0.5, interpolation=cv2.INTER_AREA)
-    return epiploar_error, dest
+feature_helper = FeaturesHelper()
 
 def calculate_Rt_from_frames(frame1, frame2, k1, k2, d1, d2):
-    pts1, pts2, _, _ = detect_features(frame1, frame2)
+    kps1, kps2, _, _ = feature_helper.getMatchedFeatures(frame1, frame2)
     minKeypoints = 20
-    if len(pts1) < minKeypoints:
+    if len(kps1) < minKeypoints:
         raise Exception(f'Need at least {minKeypoints} keypoints!')
 
     if debug:
-        img=cv2.drawKeypoints(frame1, pts1, frame1, flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
+        img=cv2.drawKeypoints(frame1, kps1, frame1, flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
         cv2.imshow("Left", img)
-        img2=cv2.drawKeypoints(frame2, pts2, frame2, flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
+        img2=cv2.drawKeypoints(frame2, kps2, frame2, flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
         cv2.imshow("Right", img2)
         cv2.waitKey(1)
-
-    E, mask = cv2.findEssentialMat(pts1, pts2, k1, d1, k2, d2, method=ransacMethod, prob=0.999, threshold=0.7, maxIters=1000)
+    # print(f'Type of pts1 is {type(pts1)}')
+    pts1 = keypoint_to_point2f(kps1)
+    pts2 = keypoint_to_point2f(kps2)
+    E, mask = cv2.findEssentialMat(pts1, pts2, k1, d1, k2, d2, method=cv2.RANSAC, prob=0.999, threshold=0.7)
 
     points, R_est, t_est, mask_pose = cv2.recoverPose(E, pts1, pts2, mask=mask)
     print(f' First E: {E}, R: {R_est}, t: {t_est}')
+
     ret, E, R_est, t_est, mask_pose = cv2.recoverPose(pts1, pts2, k1, d1, k2, d2, method=ransacMethod, prob=0.999, threshold=0.7)
     print(f' Second ret: {ret} E: {E}, R: {R_est}, t: {t_est}')
 
@@ -171,14 +82,73 @@ def calculate_Rt_from_frames(frame1, frame2, k1, k2, d1, d2):
 
     return R_est, t_est, R1, R2, P1, P2, Q
 
-def calculate_epipolar_error(frame1, frame2):
-    minNrInliers = 10
-    kp_left, kp_right, _, _ = detect_features(frame1, frame2)
+def publish_input_frames(videoHandlers):
+    ts = dai.Clock.now()
+    endOfVideo = False
+    for xLinkName in videoHandlers.keys():
+        xLink = videoHandlers[xLinkName]
 
-    if len(kp_left) < minNrInliers or len(kp_right) < minNrInliers:
-        return math.inf
+        if (not xLink["video"].isOpened()) or endOfVideo:
+            endOfVideo = True
+            xLink["video"].release()
+            if debug:
+                print("Video " + xLinkName + " finished")
+                print(f'Path is {xLink["videoPath"]}')
+            xLink["video"] = cv2.VideoCapture(xLink['videoPath'])
+        read_correctly, frame = xLink["video"].read()
+        if not read_correctly:
+            print(f'{xLinkName} Not read correctly')
+            endOfVideo = True
+            xLink["video"].release()
+            if debug:
+                print("Video " + xLinkName + " finished")
+                print(f'Path is {xLink["videoPath"]}')
+            xLink["video"] = cv2.VideoCapture(xLink['videoPath'])
 
-    return epipolar_calculate(kp_left, kp_right, frame1, frame2, frame1.shape[:2])
+            continue
+
+        # if xLinkName == "color":
+        #     frame = cv2.resize(frame, rgbSize)
+        height = frame.shape[0]
+        if height == 800:
+            crop_top = 40
+            crop_bottom = 800 - 40
+            frame = frame[crop_top:crop_bottom, :]
+        elif height == 1080:
+            frame = cv2.resize(frame, (1280, 720))
+
+        width = frame.shape[1]
+        height = frame.shape[0]
+        channels = frame.shape[2]
+        img = dai.ImgFrame()
+        img.setTimestamp(ts)
+        img.setWidth(width)
+        img.setHeight(height)
+
+        if xLinkName == "color":
+            img.setType(dai.ImgFrame.Type.BGR888p)
+            img.setData(frame.transpose(2, 0, 1).flatten())
+        else:
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            img.setType(dai.ImgFrame.Type.RAW8)
+            img.setData(frame.reshape(height*width))
+
+        if xLinkName == "left":
+            img.setInstanceNum(dai.CameraBoardSocket.CAM_B)
+            # left_frame = frame
+            # if debug:
+            #     left_frame_rect = cv2.remap(left_frame, map_left.map_x, map_left.map_y, cv2.INTER_LINEAR)
+            #     cv2.imshow("left-rect", left_frame_rect)
+
+        elif xLinkName == "right":
+            img.setInstanceNum(dai.CameraBoardSocket.CAM_C)
+            # right_frame = frame
+            # print(f'shape is {right_frame.shape}')
+            # if debug:
+            #     right_frame_mod = cv2.remap(right_frame, map_right.map_x, map_right.map_y, cv2.INTER_LINEAR)
+            #     cv2.imshow("right-rect", right_frame_mod)
+
+        xLink["queue"].send(img)
 
 
 def create_pipeline(videoDir, calibHandler, rgbEnabled):
@@ -381,6 +351,7 @@ if __name__ == "__main__":
             rgb_k = np.array(rgb_k)
             rgb_d = calibration_handler.getDistortionCoefficients(rgb_camera)
             rgb_d = np.array(rgb_d)
+
         estimate_counts = 0
         estimates = {} 
         estimates["lr"] = []
@@ -391,84 +362,32 @@ if __name__ == "__main__":
         while True:
             try:
                 if options.videoDir is not None:
-                    ts = dai.Clock.now()
-                    endOfVideo = False
-                    for xLinkName in videoHandlers.keys():
-                        xLink = videoHandlers[xLinkName]
-
-                        if (not xLink["video"].isOpened()) or endOfVideo:
-                            endOfVideo = True
-                            xLink["video"].release()
-                            if debug:
-                                print("Video " + xLinkName + " finished")
-                                print(f'Path is {xLink["videoPath"]}')
-                            xLink["video"] = cv2.VideoCapture(xLink['videoPath'])
-                        read_correctly, frame = xLink["video"].read()
-                        if not read_correctly:
-                            print(f'{xLinkName} Not read correctly')
-                            endOfVideo = True
-                            xLink["video"].release()
-                            if debug:
-                                print("Video " + xLinkName + " finished")
-                                print(f'Path is {xLink["videoPath"]}')
-                            xLink["video"] = cv2.VideoCapture(xLink['videoPath'])
-
-                            continue
-
-                        # if xLinkName == "color":
-                        #     frame = cv2.resize(frame, rgbSize)
-                        width = frame.shape[1]
-
-                        if width == 800:
-                            crop_top = 40
-                            crop_bottom = 800 - 40
-                            frame = frame[crop_top:crop_bottom, :]
-                        elif width == 1920:
-                            frame = cv2.resize(frame, (1280, 720))
-
-                        width = frame.shape[1]
-                        height = frame.shape[0]
-                        channels = frame.shape[2]
-                        img = dai.ImgFrame()
-                        img.setTimestamp(ts)
-                        img.setWidth(width)
-                        img.setHeight(height)
-
-                        if xLinkName == "color":
-                            img.setType(dai.ImgFrame.Type.BGR888p)
-                            img.setData(frame.transpose(2, 0, 1).flatten())
-                        else:
-                            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                            img.setType(dai.ImgFrame.Type.RAW8)
-                            img.setData(frame.reshape(height*width))
-
-                        if xLinkName == "left":
-                            img.setInstanceNum(dai.CameraBoardSocket.CAM_B)
-                            # left_frame = frame
-                            # if debug:
-                            #     left_frame_rect = cv2.remap(left_frame, map_left.map_x, map_left.map_y, cv2.INTER_LINEAR)
-                            #     cv2.imshow("left-rect", left_frame_rect)
-
-                        elif xLinkName == "right":
-                            img.setInstanceNum(dai.CameraBoardSocket.CAM_C)
-                            # right_frame = frame
-                            # print(f'shape is {right_frame.shape}')
-                            # if debug:
-                            #     right_frame_mod = cv2.remap(right_frame, map_right.map_x, map_right.map_y, cv2.INTER_LINEAR)
-                            #     cv2.imshow("right-rect", right_frame_mod)
-
-                        xLink["queue"].send(img)
+                    publish_input_frames(videoHandlers)
 
                 leftFrameData = left_camera_queue.get()
-                left_frame = leftFrameData.getCvFrame()
                 rightFrameData = right_camera_queue.get()
+
+                left_frame = leftFrameData.getCvFrame()
                 right_frame = rightFrameData.getCvFrame()
+
                 left_rect_frame = left_rectified_camera_queue.get().getCvFrame()
                 right_rect_frame = right_rectified_camera_queue.get().getCvFrame()
+
                 if debug:
                     cv2.imshow('left', left_frame)
                     cv2.imshow('right', right_frame)
 
+                if len(left_frame.shape) != 2:
+                    left_frame = cv2.cvtColor(left_frame, cv2.COLOR_BGR2GRAY)
+                if len(right_frame.shape) != 2:
+                    right_frame = cv2.cvtColor(right_frame, cv2.COLOR_BGR2GRAY)
+                left_mean = np.mean(left_frame)
+                right_mean = np.mean(right_frame)
+
+                if left_mean > 200 or right_mean > 200:
+                    print(f'left mean: {left_mean}, right mean: {right_mean}')
+                    cv2.waitKey(1)
+                    continue
 
                 estimate_counts += 1
                 if estimate_counts < 10:
@@ -487,7 +406,6 @@ if __name__ == "__main__":
                     d2 = right_d
 
                     for i in range(len(estimates["lr"])):
-                        
                         R, T, R1, R2, P1, P2, Q = estimates["lr"][i]
                         mapx_l, mapy_l = cv2.initUndistortRectifyMap(M1, d1, R1, M2, img_shape, cv2.CV_32FC1)
                         mapx_r, mapy_r = cv2.initUndistortRectifyMap(M2, d2, R2, M2, img_shape, cv2.CV_32FC1)
@@ -495,12 +413,13 @@ if __name__ == "__main__":
                         img_l = cv2.remap(left_frame, mapx_l, mapy_l, cv2.INTER_LINEAR)
                         img_r = cv2.remap(right_frame, mapx_r, mapy_r, cv2.INTER_LINEAR)
 
-                        stereo_epipolar, disp_image = calculate_epipolar_error(img_l, img_r)
+                        stereo_epipolar, disp_image = feature_helper.calculate_epipolar_error(img_l, img_r)
                         if i not in epipolar_list["lr"]:
                             epipolar_list["lr"][i] = []
                         epipolar_list["lr"][i].append(stereo_epipolar)
                         if debug:
                             cv2.imshow("lr", disp_image)
+                        cv2.waitKey(1)
                         # if stereo_epipolar > epipolar_threshold:
                         #     print(f"Stereo epipolar error: {stereo_epipolar} is higher than threshold {epipolar_threshold}")
                         #     continue
@@ -517,7 +436,7 @@ if __name__ == "__main__":
                             img_rgb = cv2.remap(rgb_frame, mapx_rgb, mapy_rgb, cv2.INTER_LINEAR)
                             img_rgb2 = cv2.remap(right_frame, mapx_rgb2, mapy_rgb2, cv2.INTER_LINEAR)
 
-                            rgb_epipolar, disp_image = calculate_epipolar_error(img_rgb, img_rgb2)
+                            rgb_epipolar, disp_image = feature_helper.calculate_epipolar_error(img_rgb, img_rgb2)
                             if i not in epipolar_list["rgb"]:
                                 epipolar_list["rgb"][i] = []
                             epipolar_list["rgb"][i].append(rgb_epipolar)
@@ -538,9 +457,9 @@ if __name__ == "__main__":
                 print(error_line)
                 continue
 
-        for i in range(estimates["lr"]):
+        for i in range(len(estimates["lr"])):
             print(f'lr epipolar errors from {i}\'th estimation are : {epipolar_list["lr"][i]}')
-        for i in range(estimates["rgb"]):
+        for i in range(len(estimates["rgb"])):
             print(f'rgb-r epipolar errors from {i}\'th estimation are : {epipolar_list["rgb"][i]}')
         
         exit(1)
