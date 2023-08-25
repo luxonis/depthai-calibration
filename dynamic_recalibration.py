@@ -21,6 +21,7 @@ from pathlib import Path
 import time
 import traceback
 from feature_helper import FeaturesHelper, keypoint_to_point2f
+from scipy.spatial.transform import Rotation
 
 epilog_text="Dynamic recalibration."
 parser = argparse.ArgumentParser(
@@ -49,36 +50,66 @@ rgbEnabled = not options.disableRgb
 dryRun = options.dryRun
 debug = options.debug
 
-ransacMethod = cv2.RANSAC
-if cv2.__version__ >= "4.5.4":
-    ransacMethod = cv2.USAC_MAGSAC
+ransacMethod = cv2.LMEDS
+# if cv2.__version__ >= "4.5.4":
+#     ransacMethod = cv2.USAC_MAGSAC
+#     print('Using MAGSAC')
 
-feature_helper = FeaturesHelper()
+feature_helper = FeaturesHelper(0.3, 1)
 
-def calculate_Rt_from_frames(frame1, frame2, k1, k2, d1, d2):
+def calculate_Rt_from_frames(frame1, frame2, k1, k2, d1, d2, T):
     kps1, kps2, _, _ = feature_helper.getMatchedFeatures(frame1, frame2)
     minKeypoints = 20
+    t = T[:3, 3].reshape(-1, 1).copy()
+    print(f'Original t shape: {t.shape}')
+    r_original = T[:3, :3]
     if len(kps1) < minKeypoints:
         raise Exception(f'Need at least {minKeypoints} keypoints!')
 
     if debug:
-        img=cv2.drawKeypoints(frame1, kps1, frame1, flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
-        cv2.imshow("Left", img)
-        img2=cv2.drawKeypoints(frame2, kps2, frame2, flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
-        cv2.imshow("Right", img2)
-        cv2.waitKey(1)
+        img_frame = feature_helper.draw_features(frame1, frame2, kps1, kps2)
+        cv2.imshow("marked image ", img_frame)
+        cv2.waitKey(2)
+        # img=cv2.drawKeypoints(frame1, kps1, frame1, flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
+        # cv2.imshow("Left", img)
+        # img2=cv2.drawKeypoints(frame2, kps2, frame2, flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
+        # cv2.imshow("Right", img2)
+
     # print(f'Type of pts1 is {type(pts1)}')
     pts1 = keypoint_to_point2f(kps1)
     pts2 = keypoint_to_point2f(kps2)
-    E, mask = cv2.findEssentialMat(pts1, pts2, k1, d1, k2, d2, method=cv2.RANSAC, prob=0.999, threshold=0.7)
+    E, mask = cv2.findEssentialMat(pts1, pts2, k1, d1, k2, d2, method=ransacMethod, prob=0.999, threshold=0.5)
 
-    points, R_est, t_est, mask_pose = cv2.recoverPose(E, pts1, pts2, mask=mask)
-    print(f' First E: {E}, R: {R_est}, t: {t_est}')
+    u_pts1 = cv2.undistortPoints(pts1, k1, d1).reshape(-1, 2)
+    u_pts2 = cv2.undistortPoints(pts2, k2, d2).reshape(-1, 2)
 
-    ret, E, R_est, t_est, mask_pose = cv2.recoverPose(pts1, pts2, k1, d1, k2, d2, method=ransacMethod, prob=0.999, threshold=0.7)
-    print(f' Second ret: {ret} E: {E}, R: {R_est}, t: {t_est}')
+    normalized_k = np.eye(3)
+    ret, R_est, t_est, mask_pose, triangulated_pts = cv2.recoverPose(E, u_pts1, u_pts2, normalized_k, distanceThresh = 1, mask=mask)
+    # ret, R_est, t_est, mask_pose, triangulated_pts = cv2.recoverPose(E, u_pts1, u_pts2, normalized_k, distanceThresh = 2, mask=mask)
+
+    # Homogenious version of undistorted points
+    pts1_h = np.hstack([u_pts1, np.ones((u_pts1.shape[0], 1))])
+    pts2_h = np.hstack([u_pts2, np.ones((u_pts2.shape[0], 1))])
+
+    # ret, E, R_est, t_est, mask_pose = cv2.recoverPose(pts1, pts2, k1, d1, k2, d2, method=ransacMethod, prob=0.999, threshold=0.3)
+    rot = Rotation.from_matrix(R_est)
+    print(f'Ret of recoverPose is {ret}')
+    print(f'Rotation LR matrix from recoverPose  {rot.as_euler("xyz", degrees=True)}')
+    # print(f'Trianglulated points  is {triangulated_pts.T}')
+    
+    # print(f' Second ret: {ret} E: {E},\n R: {R_est},\n t: {t_est}')
+    t_est *= np.linalg.norm(t)
+    print(f'estimated t: {t_est}')
 
     R1, R2, P1, P2, Q, roi_left, roi_right = cv2.stereoRectify(k1, d1, k2, d2, frame2.shape[::-1], R_est, t_est)
+    constraint = np.diagonal(np.dot(pts2_h, np.dot(E, pts1_h.T)))
+    # print(f'constraint shape is {constraint.shape}')
+    # print(f'constraints are  {constraint}')
+    print(f'constraint mean is {np.mean(constraint)}')
+    print(f'constraint std is {np.std(constraint)}')
+    print(f'constraint min is {np.min(constraint)}')
+    print(f'constraint max is {np.max(constraint)}')
+
 
     return R_est, t_est, R1, R2, P1, P2, Q
 
@@ -332,7 +363,6 @@ if __name__ == "__main__":
                 rgb_img_shape = (1280, 720)
                 # print(f'width is {width}, height is {height}')
                 # exit(1)
-        
 
         left_k = calibration_handler.getCameraIntrinsics(left_camera, stereo_img_shape[0], stereo_img_shape[1])
         right_k = calibration_handler.getCameraIntrinsics(right_camera, stereo_img_shape[0], stereo_img_shape[1])
@@ -345,12 +375,15 @@ if __name__ == "__main__":
 
         left_d = np.array(left_d)
         right_d = np.array(right_d)
-
+        original_t = calibration_handler.getCameraExtrinsics(right_camera, left_camera, False)
+        original_t_lr = np.array(original_t)
         if rgbEnabled:
             rgb_k = calibration_handler.getCameraIntrinsics(rgb_camera, rgb_img_shape[0], rgb_img_shape[1])
             rgb_k = np.array(rgb_k)
             rgb_d = calibration_handler.getDistortionCoefficients(rgb_camera)
             rgb_d = np.array(rgb_d)
+            original_t = calibration_handler.getCameraExtrinsics(rgb_camera, right_camera, False)
+            original_t_rgb = np.array(original_t)
 
         estimate_counts = 0
         estimates = {} 
@@ -373,9 +406,10 @@ if __name__ == "__main__":
                 left_rect_frame = left_rectified_camera_queue.get().getCvFrame()
                 right_rect_frame = right_rectified_camera_queue.get().getCvFrame()
 
-                if debug:
-                    cv2.imshow('left', left_frame)
-                    cv2.imshow('right', right_frame)
+                # if debug:
+                #     cv2.imshow('left', left_frame)
+                #     cv2.imshow('right', right_frame)
+                #     cv2.waitKey(0)
 
                 if len(left_frame.shape) != 2:
                     left_frame = cv2.cvtColor(left_frame, cv2.COLOR_BGR2GRAY)
@@ -384,22 +418,37 @@ if __name__ == "__main__":
                 left_mean = np.mean(left_frame)
                 right_mean = np.mean(right_frame)
 
+                print(f'left mean: {left_mean}, right mean: {right_mean}')
                 if left_mean > 200 or right_mean > 200:
-                    print(f'left mean: {left_mean}, right mean: {right_mean}')
                     cv2.waitKey(1)
                     continue
 
                 estimate_counts += 1
-                if estimate_counts < 10:
-                    R, T, R1, R2, P1, P2, Q = calculate_Rt_from_frames(left_frame, right_frame, left_k, right_k, left_d, right_d)
+                if estimate_counts < 20:
+                    print(f'Original T LR -> {original_t_lr[:3, 3]}')
+                    R, T, R1, R2, P1, P2, Q = calculate_Rt_from_frames(left_frame, right_frame, left_k, right_k, left_d, right_d, original_t_lr)
                     estimates["lr"].append((R, T, R1, R2, P1, P2, Q))
+
+                    # rot = Rotation.from_matrix(R1)
+                    # print(f'Rotation Left matrix is {rot.as_euler("xyz", degrees=True)}')
+                    # rot = Rotation.from_matrix(R2)
+                    # print(f'Rotation Right matrix is {rot.as_euler("xyz", degrees=True)}')
                     if rgbEnabled:
+                        print(f'Original T RGB-R -> {original_t_rgb[:3, 3]}')
+
                         rgb_frame = rgb_camera_queue.get().getCvFrame()
-                        R, T, R1, R2, P1, P2, Q = calculate_Rt_from_frames(rgb_frame, right_frame, rgb_k, right_k, rgb_d, right_d)
+                        R, T, R1, R2, P1, P2, Q = calculate_Rt_from_frames(rgb_frame, right_frame, rgb_k, right_k, rgb_d, right_d, original_t_rgb)
                         # rgbR = np.linalg.inv(rgbR) #right to rgb rotation
-                        estimates["lr"].append((R, T, R1, R2, P1, P2, Q))
+                        estimates["rgb"].append((R, T, R1, R2, P1, P2, Q))
+
+                        # rot = Rotation.from_matrix(R1)
+                        # print(f'Rotation Left RGB matrix is {rot.as_euler("xyz", degrees=True)}')
+                        # rot = Rotation.from_matrix(R2)
+                        # print(f'Rotation Right RGB matrix is {rot.as_euler("xyz", degrees=True)}')
+
                 else:
-                    img_shape = left_rect_frame.shape
+                    print(f'Count estimate is {estimate_counts}')
+                    img_shape = left_rect_frame.shape[::-1]
                     M1 = left_k
                     M2 = right_k
                     d1 = left_d
@@ -407,11 +456,20 @@ if __name__ == "__main__":
 
                     for i in range(len(estimates["lr"])):
                         R, T, R1, R2, P1, P2, Q = estimates["lr"][i]
+                        rot = Rotation.from_matrix(R1)
+                        print(f'Rotation Left matrix is {rot.as_euler("xyz", degrees=True)}')
+                        rot = Rotation.from_matrix(R2)
+                        print(f'Rotation Right matrix is {rot.as_euler("xyz", degrees=True)}')
+
                         mapx_l, mapy_l = cv2.initUndistortRectifyMap(M1, d1, R1, M2, img_shape, cv2.CV_32FC1)
                         mapx_r, mapy_r = cv2.initUndistortRectifyMap(M2, d2, R2, M2, img_shape, cv2.CV_32FC1)
 
                         img_l = cv2.remap(left_frame, mapx_l, mapy_l, cv2.INTER_LINEAR)
                         img_r = cv2.remap(right_frame, mapx_r, mapy_r, cv2.INTER_LINEAR)
+                        # print("Rect image shape", img_r.shape)
+                        # print('Original shape', left_frame.shape)
+                        # cv2.imshow('Rect left', img_l)
+                        # cv2.imshow('Rect right', img_r)
 
                         stereo_epipolar, disp_image = feature_helper.calculate_epipolar_error(img_l, img_r)
                         if i not in epipolar_list["lr"]:
@@ -419,7 +477,7 @@ if __name__ == "__main__":
                         epipolar_list["lr"][i].append(stereo_epipolar)
                         if debug:
                             cv2.imshow("lr", disp_image)
-                        cv2.waitKey(1)
+                        cv2.waitKey(2)
                         # if stereo_epipolar > epipolar_threshold:
                         #     print(f"Stereo epipolar error: {stereo_epipolar} is higher than threshold {epipolar_threshold}")
                         #     continue
@@ -446,7 +504,9 @@ if __name__ == "__main__":
                             # if rgb_epipolar > epipolar_threshold:
                             #     print(f"RGB epipolar {rgb_epipolar} is higher than threshold {epipolar_threshold}")
                             #     continue
-                if estimate_counts >= 20:
+                if estimate_counts >= 30:
+                    print("Breaking------------------")
+
                     break
             except Exception as e:
                 print(e)

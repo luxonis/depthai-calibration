@@ -72,10 +72,8 @@ class FeaturesHelper:
                 del des_right_filtered[i]
         return kp_left_filtered, kp_right_filtered, np.array(des_left_filtered), np.array(des_right_filtered)
     
-    def calculate_epipolar_error(self, left_undistorted, right_undistorted):
-        kp_left_filtered, kp_right_filtered, _, _ = self.getMatchedFeatures(left_undistorted, right_undistorted)
-
-        horStack = np.hstack((left_undistorted, right_undistorted))
+    def draw_features(self, left_image, right_image, kp_left, kp_right):
+        horStack = np.hstack((left_image, right_image))
         if len(horStack.shape) < 3:
             horStack = cv2.cvtColor(horStack, cv2.COLOR_GRAY2BGR)
         green = (0, 255, 0)
@@ -83,26 +81,37 @@ class FeaturesHelper:
         # blue = (255, 0, 0)
         radius = 2
         thickness = 1
-        size = left_undistorted.shape[:2]
-        print(size)
+        size = left_image.shape[:2]
+        for i in range(len(kp_left)):
+            left_pt = kp_left[i].pt
+            right_pt = kp_right[i].pt
+            left_pt_i = (int(left_pt[0]), int(left_pt[1]))
+            right_pt_i = (size[1] + int(right_pt[0]), int(right_pt[1]))
+
+            cv2.circle(horStack, left_pt_i, radius, red, thickness)
+            cv2.circle(horStack, right_pt_i, radius, red, thickness)
+            horStack = cv2.line(horStack, left_pt_i, right_pt_i, green, thickness)
+
+        dest = cv2.resize(horStack, (0, 0), fx = 0.5, fy= 0.5, interpolation=cv2.INTER_AREA)
+        return dest
+
+    def calculate_epipolar_error(self, left_undistorted, right_undistorted):
+        kp_left_filtered, kp_right_filtered, _, _ = self.getMatchedFeatures(left_undistorted, right_undistorted)
+
+        # print(size)
         epiploar_error = 0
 
         for i in range(len(kp_left_filtered)):
             left_pt = kp_left_filtered[i].pt
             right_pt = kp_right_filtered[i].pt
-            left_pt_i = (int(left_pt[0]), int(left_pt[1]))
-            right_pt_i = (size[0] + int(right_pt[0]), int(right_pt[1]))
 
-            cv2.circle(horStack, left_pt_i, radius, red, thickness)
-            cv2.circle(horStack, right_pt_i, radius, red, thickness)
-            horStack = cv2.line(horStack, left_pt_i, right_pt_i, green, thickness)
             epiploar_error += abs(left_pt[1] - right_pt[1])
-
-        dest = cv2.resize(horStack, (0, 0), fx = 0.5, fy= 0.5, interpolation=cv2.INTER_AREA)
+        
+        marked_image = self.draw_features(left_undistorted, right_undistorted, kp_left_filtered, kp_right_filtered)
         if len(kp_left_filtered) < 20:
-            return -(sys.maxsize - 1), dest
+            return -(sys.maxsize - 1), marked_image
         epiploar_error /= len(kp_left_filtered)
-        return epiploar_error, dest
+        return epiploar_error, marked_image
 
 
 def keypoint_to_point2f(kp):
