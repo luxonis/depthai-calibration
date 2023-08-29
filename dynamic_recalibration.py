@@ -10,10 +10,11 @@ Recommended to try dynamic calibration if depth quality degraded over time.
 Requires initial intrinsic calibration.
 This script supports all sensor combinations that calibrate.py supports.
 """
+import os
+# os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = '/home/sachin/.local/lib/python3.10/site-packages/cv2/qt/plugins'
 
 from cmath import inf
 import numpy as np
-import cv2
 import depthai as dai
 import math
 import argparse
@@ -22,6 +23,13 @@ import time
 import traceback
 from feature_helper import FeaturesHelper, keypoint_to_point2f
 from scipy.spatial.transform import Rotation
+import matplotlib
+matplotlib.use('TkAgg')  # Use the Tk backend
+import matplotlib.pyplot as plt
+
+import cv2
+
+# plt = matplotlib.pyplot
 
 epilog_text="Dynamic recalibration."
 parser = argparse.ArgumentParser(
@@ -50,7 +58,7 @@ rgbEnabled = not options.disableRgb
 dryRun = options.dryRun
 debug = options.debug
 
-ransacMethod = cv2.LMEDS
+ransacMethod = cv2.RANSAC
 # if cv2.__version__ >= "4.5.4":
 #     ransacMethod = cv2.USAC_MAGSAC
 #     print('Using MAGSAC')
@@ -64,7 +72,8 @@ def calculate_Rt_from_frames(frame1, frame2, k1, k2, d1, d2, T):
     print(f'Original t shape: {t.shape}')
     r_original = T[:3, :3]
     if len(kps1) < minKeypoints:
-        raise Exception(f'Need at least {minKeypoints} keypoints!')
+        print(f'Need at least {minKeypoints} keypoints!')
+        return None, None, None, None, None, None, None
 
     if debug:
         img_frame = feature_helper.draw_features(frame1, frame2, kps1, kps2)
@@ -78,7 +87,9 @@ def calculate_Rt_from_frames(frame1, frame2, k1, k2, d1, d2, T):
     # print(f'Type of pts1 is {type(pts1)}')
     pts1 = keypoint_to_point2f(kps1)
     pts2 = keypoint_to_point2f(kps2)
-    E, mask = cv2.findEssentialMat(pts1, pts2, k1, d1, k2, d2, method=ransacMethod, prob=0.999, threshold=0.5)
+    method = 1
+    # if method:
+    E, mask = cv2.findEssentialMat(pts1, pts2, k1, d1, k2, d2, method=ransacMethod, prob=0.999, threshold=0.7)
 
     u_pts1 = cv2.undistortPoints(pts1, k1, d1).reshape(-1, 2)
     u_pts2 = cv2.undistortPoints(pts2, k2, d2).reshape(-1, 2)
@@ -229,8 +240,8 @@ def create_pipeline(videoDir, calibHandler, rgbEnabled):
         cam_right.setResolution(dai.MonoCameraProperties.SensorResolution.THE_720_P)
         cam_right.setFps(camFps)
 
-        stereoLeftIn = xLinks["right"]["node"].out
-        stereoRightIn = xLinks["left"]["node"].out
+        stereoLeftIn = cam_left.out
+        stereoRightIn = cam_right.out
         
         if rgbEnabled:
             rgbLensPosition = None
@@ -427,7 +438,8 @@ if __name__ == "__main__":
                 if estimate_counts < 20:
                     print(f'Original T LR -> {original_t_lr[:3, 3]}')
                     R, T, R1, R2, P1, P2, Q = calculate_Rt_from_frames(left_frame, right_frame, left_k, right_k, left_d, right_d, original_t_lr)
-                    estimates["lr"].append((R, T, R1, R2, P1, P2, Q))
+                    if R is not None:
+                        estimates["lr"].append((R, T, R1, R2, P1, P2, Q))
 
                     # rot = Rotation.from_matrix(R1)
                     # print(f'Rotation Left matrix is {rot.as_euler("xyz", degrees=True)}')
@@ -511,10 +523,11 @@ if __name__ == "__main__":
             except Exception as e:
                 print(e)
                 cv2.waitKey(1)
-                tb = traceback.format_exc()
-                error_line = tb.split("\n")[-3]
-                print(f"Error: {e}")
-                print(error_line)
+                # tb = traceback.format_exc()
+                # error_line = tb.split("\n")[-3]
+                # print(tb)
+                traceback.print_exc()
+                exit(1)
                 continue
 
         for i in range(len(estimates["lr"])):
