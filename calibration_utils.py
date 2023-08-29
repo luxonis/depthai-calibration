@@ -222,24 +222,18 @@ class StereoCalibration(object):
 
                     print('<-------------Epipolar error of {} and {} ------------>'.format(
                         left_cam_info['name'], right_cam_info['name']))
-                   # [Cenek] For fisheye model the epipolar verification does not seem to work,
-                    #  rectification seems to be incorrect and the test fails. Impossible to calibrate Wide cameras
-                    # TODO: find the bug and correct
-                    if self.cameraModel == 'fisheye':
-                        left_cam_info['extrinsics']['epipolar_error'] = 0.0
-                    else:
-                        left_cam_info['extrinsics']['epipolar_error'] = self.test_epipolar_charuco(
-                                                                                            left_path, 
-                                                                                            right_path, 
-                                                                                            left_cam_info['intrinsics'], 
-                                                                                            left_cam_info['dist_coeff'], 
-                                                                                            right_cam_info['intrinsics'], 
-                                                                                            right_cam_info['dist_coeff'], 
-                                                                                            extrinsics[2], # Translation between left and right Cameras
-                                                                                            extrinsics[3], # Left Rectification rotation 
-                                                                                            extrinsics[4], # Right Rectification rotation 
-                                                                                            extrinsics[5], # Left Rectification Intrinsics
-                                                                                            extrinsics[6]) # Right Rectification Intrinsics
+                    left_cam_info['extrinsics']['epipolar_error'] = self.test_epipolar_charuco(
+                                                                                        left_path, 
+                                                                                        right_path, 
+                                                                                        left_cam_info['intrinsics'], 
+                                                                                        left_cam_info['dist_coeff'], 
+                                                                                        right_cam_info['intrinsics'], 
+                                                                                        right_cam_info['dist_coeff'], 
+                                                                                        extrinsics[2], # Translation between left and right Cameras
+                                                                                        extrinsics[3], # Left Rectification rotation 
+                                                                                        extrinsics[4], # Right Rectification rotation 
+                                                                                        extrinsics[5], # Left Rectification Intrinsics
+                                                                                        extrinsics[6]) # Right Rectification Intrinsics
 
                     left_cam_info['extrinsics']['rotation_matrix'] = extrinsics[1]
                     left_cam_info['extrinsics']['translation'] = extrinsics[2]
@@ -563,16 +557,9 @@ class StereoCalibration(object):
                 obj_pts_sub.append(one_pts[allIds[i][j]])
             obj_points.append(np.array(obj_pts_sub, dtype=np.float32))
 
-        # cameraMatrixInit = np.array([[907.84859625,   0.0        , 995.15888273],
-        #                              [  0.0       ,  889.29269629, 627.49748034],
-        #                              [  0.0       ,    0.0       ,    1.0      ]])
-
-        # Replacing the hardcoded matrix with one estimated from image size and hfov
-        # TODO[Cenek]: Find good initial matrix for all cameras
-        f = imsize[0] / (2 * np.tan(np.deg2rad(hfov/2)))*(hfov/90)**2
-        cameraMatrixInit = np.array([[f,    0.0,      imsize[0]/2],
-                                     [0.0,     f,      imsize[1]/2],
-                                     [0.0,   0.0,        1.0]])
+        cameraMatrixInit = np.array([[907.84859625,   0.0        , 995.15888273],
+                                     [  0.0       ,  889.29269629, 627.49748034],
+                                     [  0.0       ,    0.0       ,    1.0      ]])
  
         print("Camera Matrix initialization.............")
         print(cameraMatrixInit)
@@ -580,7 +567,7 @@ class StereoCalibration(object):
         flags |= cv2.fisheye.CALIB_CHECK_COND 
         flags |= cv2.fisheye.CALIB_USE_INTRINSIC_GUESS 
         flags |= cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC 
-        flags |= cv2.fisheye.CALIB_FIX_SKEW
+        #flags |= cv2.fisheye.CALIB_FIX_SKEW
         distCoeffsInit = np.zeros((4, 1))
         term_criteria = (cv2.TERM_CRITERIA_COUNT +
                          cv2.TERM_CRITERIA_EPS, 50000, 1e-9)
