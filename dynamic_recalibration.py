@@ -65,11 +65,83 @@ ransacMethod = cv2.RANSAC
 
 feature_helper = FeaturesHelper(0.3, 1)
 
+fig = plt.figure()
+ax = fig.add_subplot(111, projection='3d')
+
+# Adding additional constaints that apply to stereo normal setups. 
+def retrive_rt_from_essential_mat(E, pts1, pts2, k1, k2, d1, d2, T):
+    p1 = k1 @ np.eye(3, 4)
+    u_pts1 = cv2.undistortPoints(pts1, k1, d1, P = p1).reshape(-1, 2)
+    u_pts2 = cv2.undistortPoints(pts2, k2, d2, P = p1).reshape(-1, 2)
+    t_org = T[:3, 3].reshape(-1, 1)
+    R_org = T[:3, :3]
+    rot = Rotation.from_matrix(R_org)
+    r_org, p_org, y_org = rot.as_euler("xyz", degrees=True)
+
+    R1, R2, t_e = cv2.decomposeEssentialMat(E)
+    t_est_dir = t_e / np.linalg.norm(t_e)
+    t_org_dir = t_org / np.linalg.norm(t_org)
+
+    combs = []
+    for r, t in [(R1, t_e), (R2, t_e)]:
+        dot_product = np.dot(t_est_dir.T, t_org_dir)
+        angle_rad = np.arccos(dot_product)
+        # Angle between vectors in degrees
+        angle_deg = np.degrees(angle_rad)
+        print(f'dot product is {dot_product}')
+        print(f'angle is {angle_deg}')
+
+        if angle_deg < 185 and angle_deg > 175:
+            t = -t
+        elif angle_deg < 5 and angle_deg > -5:
+            pass
+        else:
+            continue
+        rot = Rotation.from_matrix(r)
+        r_e, p_e, y_e = rot.as_euler("xyz", degrees=True)
+        if abs(r_e - r_org) > 8 or abs(p_e - p_org) > 8 or abs(y_e - y_org) > 8:
+            continue
+
+        combs.append((r, t))
+
+
+    res = (None, None, None)
+    for r, t in combs:
+        p2 = k1 @ np.hstack([r, t])
+        print(f'p2 is {p2}')
+        rot = Rotation.from_matrix(r)
+        print(f'Rotation matrix is {rot.as_euler("xyz", degrees=True)}')
+        print(f'translation is {t}')
+        triangulated_pts = cv2.triangulatePoints(p1, p2, u_pts1.T, u_pts2.T)
+        triangulated_pts = triangulated_pts.T
+        points_euclidean = triangulated_pts[:, :3] / triangulated_pts[:, 3:4]
+        # if np.all(points_euclidean[:, 2] > 0):
+        #     points_euclidean = points_euclidean[points_euclidean[:, 2] <= 3]
+        #     res = (r, t, points_euclidean)
+        print(f'Filtered points shape is {points_euclidean.shape}')
+        print(f'Median of z in filterd pts is {np.median(points_euclidean[:, 2])}')
+    # exit(1)
+
+    return res
+
+
+
+
+
+
+
+
+
+    return R_est, t_est
+
+# TODO: Track features across multiple frames and 
+# remove outliers and then use the features with better age to estimate the rotation.   
 def calculate_Rt_from_frames(frame1, frame2, k1, k2, d1, d2, T):
     kps1, kps2, _, _ = feature_helper.getMatchedFeatures(frame1, frame2)
     minKeypoints = 20
-    t = T[:3, 3].reshape(-1, 1).copy()
-    print(f'Original t shape: {t.shape}')
+    t_original = T[:3, 3].reshape(-1, 1)
+    t_norm = np.linalg.norm(t_original)
+    print(f'Original t shape: {t_original.shape}')
     r_original = T[:3, :3]
     if len(kps1) < minKeypoints:
         print(f'Need at least {minKeypoints} keypoints!')
@@ -78,11 +150,11 @@ def calculate_Rt_from_frames(frame1, frame2, k1, k2, d1, d2, T):
     if debug:
         img_frame = feature_helper.draw_features(frame1, frame2, kps1, kps2)
         cv2.imshow("marked image ", img_frame)
-        cv2.waitKey(2)
         # img=cv2.drawKeypoints(frame1, kps1, frame1, flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
         # cv2.imshow("Left", img)
         # img2=cv2.drawKeypoints(frame2, kps2, frame2, flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
         # cv2.imshow("Right", img2)
+        cv2.waitKey(1)
 
     # print(f'Type of pts1 is {type(pts1)}')
     pts1 = keypoint_to_point2f(kps1)
@@ -97,29 +169,62 @@ def calculate_Rt_from_frames(frame1, frame2, k1, k2, d1, d2, T):
     normalized_k = np.eye(3)
     ret, R_est, t_est, mask_pose, triangulated_pts = cv2.recoverPose(E, u_pts1, u_pts2, normalized_k, distanceThresh = 1, mask=mask)
     # ret, R_est, t_est, mask_pose, triangulated_pts = cv2.recoverPose(E, u_pts1, u_pts2, normalized_k, distanceThresh = 2, mask=mask)
+    t_est *= t_norm
+    print(f'estimated t: {t_est}')
 
-    # Homogenious version of undistorted points
+    if 0:
+        # ret, E, R_est, t_est, mask_pose = cv2.recoverPose(pts1, pts2, k1, d1, k2, d2, method=ransacMethod, prob=0.999, threshold=0.3)
+        rot = Rotation.from_matrix(R_est)
+        print(f'Ret of recoverPose is {ret}')
+        print(f'Rotation LR matrix from recoverPose  {rot.as_euler("xyz", degrees=True)}')
+
+        R1, R2, t_e = cv2.decomposeEssentialMat(E)
+        print(f'From decompose Essential mat')
+        rot = Rotation.from_matrix(R1)
+        print(f'Rotation R1 from decomposeEssentialMat  {rot.as_euler("xyz", degrees=True)}')
+        rot = Rotation.from_matrix(R2)
+        print(f'Rotation R2 from decomposeEssentialMat  {rot.as_euler("xyz", degrees=True)}')
+        print(f't_e from decomposeEssentialMat  {t_e*t_norm}')
+        print(f'neg t_e from decomposeEssentialMat  {-t_e*t_norm}')
+
+        print(f'Keypoints size is {pts1.shape}')
+        triangulated_pts = triangulated_pts.T
+        points_euclidean = triangulated_pts[:, :3] / triangulated_pts[:, 3:4]
+        print(f'size of points_euclidean is ----------------------> {points_euclidean.shape}')
+
+    R_est_x, t_est_x, points_euclidean = retrive_rt_from_essential_mat(E, pts1, pts2, k1, k2, d1, d2, T)
+    if R_est_x is not None:
+        rot = Rotation.from_matrix(R_est_x)
+        print(f'~~~~~~~~~~~~~~~~~~Rotation LR matrix from retrive_rt_from_essential_mat  {rot.as_euler("xyz", degrees=True)}')
+        print(f'~~~~~~~~~~~~~~~~~estimated t retrive_rt_from_essential_mat: {t_est_x}')
+    else:
+        print(f'~~~~~~~~~~~~~~~~Could not find a valid rotation matrix')
+
+    if points_euclidean is not None:
+        ax.clear()
+        ax.scatter(points_euclidean[:, 0], points_euclidean[:, 1], points_euclidean[:, 2])
+
+        ax.set_xlabel('X Label')
+        ax.set_ylabel('Y Label')
+        ax.set_zlabel('Z Label')
+        plt.draw()
+        plt.pause(1)  # wait for 1 second
+    # cv2.waitKey(0)
+
+        input("Press Enter to continue...")
+
+    # Homogenous version of undistorted points
     pts1_h = np.hstack([u_pts1, np.ones((u_pts1.shape[0], 1))])
     pts2_h = np.hstack([u_pts2, np.ones((u_pts2.shape[0], 1))])
-
-    # ret, E, R_est, t_est, mask_pose = cv2.recoverPose(pts1, pts2, k1, d1, k2, d2, method=ransacMethod, prob=0.999, threshold=0.3)
-    rot = Rotation.from_matrix(R_est)
-    print(f'Ret of recoverPose is {ret}')
-    print(f'Rotation LR matrix from recoverPose  {rot.as_euler("xyz", degrees=True)}')
-    # print(f'Trianglulated points  is {triangulated_pts.T}')
-    
-    # print(f' Second ret: {ret} E: {E},\n R: {R_est},\n t: {t_est}')
-    t_est *= np.linalg.norm(t)
-    print(f'estimated t: {t_est}')
 
     R1, R2, P1, P2, Q, roi_left, roi_right = cv2.stereoRectify(k1, d1, k2, d2, frame2.shape[::-1], R_est, t_est)
     constraint = np.diagonal(np.dot(pts2_h, np.dot(E, pts1_h.T)))
     # print(f'constraint shape is {constraint.shape}')
     # print(f'constraints are  {constraint}')
-    print(f'constraint mean is {np.mean(constraint)}')
-    print(f'constraint std is {np.std(constraint)}')
-    print(f'constraint min is {np.min(constraint)}')
-    print(f'constraint max is {np.max(constraint)}')
+    # print(f'constraint mean is {np.mean(constraint)}')
+    # print(f'constraint std is {np.std(constraint)}')
+    # print(f'constraint min is {np.min(constraint)}')
+    # print(f'constraint max is {np.max(constraint)}')
 
 
     return R_est, t_est, R1, R2, P1, P2, Q
@@ -386,7 +491,7 @@ if __name__ == "__main__":
 
         left_d = np.array(left_d)
         right_d = np.array(right_d)
-        original_t = calibration_handler.getCameraExtrinsics(right_camera, left_camera, False)
+        original_t = calibration_handler.getCameraExtrinsics(left_camera, right_camera, False)
         original_t_lr = np.array(original_t)
         if rgbEnabled:
             rgb_k = calibration_handler.getCameraIntrinsics(rgb_camera, rgb_img_shape[0], rgb_img_shape[1])
