@@ -126,14 +126,6 @@ def retrive_rt_from_essential_mat(E, pts1, pts2, k1, k2, d1, d2, T):
 
 
 
-
-
-
-
-
-
-    return R_est, t_est
-
 # TODO: Track features across multiple frames and 
 # remove outliers and then use the features with better age to estimate the rotation.   
 def calculate_Rt_from_frames(frame1, frame2, k1, k2, d1, d2, T):
@@ -300,10 +292,11 @@ def publish_input_frames(videoHandlers):
 
 def create_pipeline(videoDir, calibHandler, rgbEnabled):
     pipeline = dai.Pipeline()
-    pipeline.setCalibrationData(calibHandler)
 
     videoLinks = {}
     if videoDir:
+        pipeline.setCalibrationData(calibHandler)
+
         xLinks = {}
         if rgbEnabled:
             input_cams = ["left", "right", "color"]
@@ -379,9 +372,8 @@ def create_pipeline(videoDir, calibHandler, rgbEnabled):
     xout_right_rect.setStreamName("right_rect")
 
     xout_left.setStreamName("left")
-    # stereoLeftIn.link(xout_left.input)
-
     xout_right.setStreamName("right")
+    # stereoLeftIn.link(xout_left.input)
     # stereoRightIn.link(xout_right.input)
 
     stereo = pipeline.create(dai.node.StereoDepth)
@@ -457,6 +449,9 @@ if __name__ == "__main__":
             left_frame = leftFrameData.getCvFrame()
             rightFrameData = right_camera_queue.get()
             right_frame = rightFrameData.getCvFrame()
+
+            left_rect_frame = left_rectified_camera_queue.get().getCvFrame()
+            right_rect_frame = right_rectified_camera_queue.get().getCvFrame()
 
             stereo_img_shape = (leftFrameData.getWidth(), leftFrameData.getHeight())
 
