@@ -58,6 +58,8 @@ rgbEnabled = not options.disableRgb
 dryRun = options.dryRun
 debug = options.debug
 
+enable3DVis = False
+
 ransacMethod = cv2.RANSAC
 # if cv2.__version__ >= "4.5.4":
 #     ransacMethod = cv2.USAC_MAGSAC
@@ -67,6 +69,8 @@ feature_helper = FeaturesHelper(0.3, 1)
 
 fig = plt.figure()
 ax = fig.add_subplot(111, projection='3d')
+
+
 
 # Adding additional constaints that apply to stereo normal setups. 
 def retrive_rt_from_essential_mat(E, pts1, pts2, k1, k2, d1, d2, T):
@@ -79,52 +83,57 @@ def retrive_rt_from_essential_mat(E, pts1, pts2, k1, k2, d1, d2, T):
     r_org, p_org, y_org = rot.as_euler("xyz", degrees=True)
 
     R1, R2, t_e = cv2.decomposeEssentialMat(E)
+    t_org_norm = np.linalg.norm(t_org)
     t_est_dir = t_e / np.linalg.norm(t_e)
-    t_org_dir = t_org / np.linalg.norm(t_org)
+    t_org_dir = t_org / t_org_norm
 
-    combs = []
+    res = (None, None, None)
     for r, t in [(R1, t_e), (R2, t_e)]:
         dot_product = np.dot(t_est_dir.T, t_org_dir)
         angle_rad = np.arccos(dot_product)
+
         # Angle between vectors in degrees
         angle_deg = np.degrees(angle_rad)
-        print(f'dot product is {dot_product}')
-        print(f'angle is {angle_deg}')
+        if debug:
+            print(f'dot product is {dot_product}')
+            print(f'angle is {angle_deg}')
 
-        if angle_deg < 185 and angle_deg > 175:
+        if angle_deg < 190 and angle_deg > 170:
             t = -t
-        elif angle_deg < 5 and angle_deg > -5:
+        elif angle_deg < 10 and angle_deg > -10:
             pass
         else:
             continue
         rot = Rotation.from_matrix(r)
         r_e, p_e, y_e = rot.as_euler("xyz", degrees=True)
         if abs(r_e - r_org) > 8 or abs(p_e - p_org) > 8 or abs(y_e - y_org) > 8:
+            # print(f'Angle diff of rpy is  {r_e - r_org} and {p_e - p_org} and {y_e - y_org}')
             continue
+        
+        if debug:
+            print(f'~~~~~~~~~~~~~~~~~~~~~~~~~~~~Found pair~~~~~~~~~~~~~~~~~~~~~~~')
+            print(f'~~~~~~~~~~~~~~~~t is {t}')
+            # p2 = k1 @ np.hstack([r, t])
+            p2 = k1 @ r
+            p2 = np.hstack([p2, t * t_org_norm])
 
-        combs.append((r, t))
-
-
-    res = (None, None, None)
-    for r, t in combs:
-        p2 = k1 @ np.hstack([r, t])
-        print(f'p2 is {p2}')
-        rot = Rotation.from_matrix(r)
-        print(f'Rotation matrix is {rot.as_euler("xyz", degrees=True)}')
-        print(f'translation is {t}')
-        triangulated_pts = cv2.triangulatePoints(p1, p2, u_pts1.T, u_pts2.T)
-        triangulated_pts = triangulated_pts.T
-        points_euclidean = triangulated_pts[:, :3] / triangulated_pts[:, 3:4]
-        # if np.all(points_euclidean[:, 2] > 0):
-        #     points_euclidean = points_euclidean[points_euclidean[:, 2] <= 3]
-        #     res = (r, t, points_euclidean)
-        print(f'Filtered points shape is {points_euclidean.shape}')
-        print(f'Median of z in filterd pts is {np.median(points_euclidean[:, 2])}')
-    # exit(1)
+            print(f'p2 is {p2}')
+            rot = Rotation.from_matrix(r)
+            print(f'Rotation matrix is {rot.as_euler("xyz", degrees=True)}')
+            print(f'translation is {t * -t_org_norm}')
+            triangulated_pts = cv2.triangulatePoints(p1, p2, u_pts1.T, u_pts2.T)
+            triangulated_pts = triangulated_pts.T
+            points_euclidean = triangulated_pts[:, :3] / triangulated_pts[:, 3:4]
+            # if np.all(points_euclidean[:, 2] > 0):
+            #     points_euclidean = points_euclidean[points_euclidean[:, 2] <= 3]
+            #     res = (r, t, points_euclidean)
+            print(f'Filtered points shape is {points_euclidean.shape}')
+            print(f'Median of z in filterd pts is {np.median(points_euclidean[:, 2])}')
+            res = (r, t, points_euclidean)
+        else:
+            res = (r, t, None)
 
     return res
-
-
 
 # TODO: Track features across multiple frames and 
 # remove outliers and then use the features with better age to estimate the rotation.   
@@ -155,62 +164,40 @@ def calculate_Rt_from_frames(frame1, frame2, k1, k2, d1, d2, T):
     # if method:
     E, mask = cv2.findEssentialMat(pts1, pts2, k1, d1, k2, d2, method=ransacMethod, prob=0.999, threshold=0.7)
 
-    u_pts1 = cv2.undistortPoints(pts1, k1, d1).reshape(-1, 2)
-    u_pts2 = cv2.undistortPoints(pts2, k2, d2).reshape(-1, 2)
-
-    normalized_k = np.eye(3)
-    ret, R_est, t_est, mask_pose, triangulated_pts = cv2.recoverPose(E, u_pts1, u_pts2, normalized_k, distanceThresh = 1, mask=mask)
-    # ret, R_est, t_est, mask_pose, triangulated_pts = cv2.recoverPose(E, u_pts1, u_pts2, normalized_k, distanceThresh = 2, mask=mask)
-    t_est *= t_norm
-    print(f'estimated t: {t_est}')
-
-    if 0:
-        # ret, E, R_est, t_est, mask_pose = cv2.recoverPose(pts1, pts2, k1, d1, k2, d2, method=ransacMethod, prob=0.999, threshold=0.3)
+    R_est, t_est, points_euclidean = retrive_rt_from_essential_mat(E, pts1, pts2, k1, k2, d1, d2, T)
+    if R_est is not None:
         rot = Rotation.from_matrix(R_est)
-        print(f'Ret of recoverPose is {ret}')
-        print(f'Rotation LR matrix from recoverPose  {rot.as_euler("xyz", degrees=True)}')
+        if debug:
+            print(f'~~~~~~~~~~~~~~~~~~Rotation LR matrix from retrive_rt_from_essential_mat  {rot.as_euler("xyz", degrees=True)}')
+            print(f'~~~~~~~~~~~~~~~~~estimated t retrive_rt_from_essential_mat: {t_est}')
+        if enable3DVis and points_euclidean is not None:
+            ax.clear()
+            ax.scatter(points_euclidean[:, 0], points_euclidean[:, 1], points_euclidean[:, 2])
+            ax.set_xlabel('X Label')
+            ax.set_ylabel('Y Label')
+            ax.set_zlabel('Z Label')
+            ax.set_xlim(-8, 8)
+            ax.set_ylim(-8, 8)
+            ax.set_zlim(-8, 8)
 
-        R1, R2, t_e = cv2.decomposeEssentialMat(E)
-        print(f'From decompose Essential mat')
-        rot = Rotation.from_matrix(R1)
-        print(f'Rotation R1 from decomposeEssentialMat  {rot.as_euler("xyz", degrees=True)}')
-        rot = Rotation.from_matrix(R2)
-        print(f'Rotation R2 from decomposeEssentialMat  {rot.as_euler("xyz", degrees=True)}')
-        print(f't_e from decomposeEssentialMat  {t_e*t_norm}')
-        print(f'neg t_e from decomposeEssentialMat  {-t_e*t_norm}')
+            plt.draw()
+            plt.pause(1)  # wait for 1 second
 
-        print(f'Keypoints size is {pts1.shape}')
-        triangulated_pts = triangulated_pts.T
-        points_euclidean = triangulated_pts[:, :3] / triangulated_pts[:, 3:4]
-        print(f'size of points_euclidean is ----------------------> {points_euclidean.shape}')
+            input("Press Enter to continue...")
 
-    R_est_x, t_est_x, points_euclidean = retrive_rt_from_essential_mat(E, pts1, pts2, k1, k2, d1, d2, T)
-    if R_est_x is not None:
-        rot = Rotation.from_matrix(R_est_x)
-        print(f'~~~~~~~~~~~~~~~~~~Rotation LR matrix from retrive_rt_from_essential_mat  {rot.as_euler("xyz", degrees=True)}')
-        print(f'~~~~~~~~~~~~~~~~~estimated t retrive_rt_from_essential_mat: {t_est_x}')
+        R1, R2, P1, P2, Q, roi_left, roi_right = cv2.stereoRectify(k1, d1, k2, d2, frame2.shape[::-1], R_est, t_est)
+        return R_est, t_est, R1, R2, P1, P2, Q
+
     else:
         print(f'~~~~~~~~~~~~~~~~Could not find a valid rotation matrix')
+        return None, None, None, None, None, None, None
 
-    if points_euclidean is not None:
-        ax.clear()
-        ax.scatter(points_euclidean[:, 0], points_euclidean[:, 1], points_euclidean[:, 2])
-
-        ax.set_xlabel('X Label')
-        ax.set_ylabel('Y Label')
-        ax.set_zlabel('Z Label')
-        plt.draw()
-        plt.pause(1)  # wait for 1 second
-    # cv2.waitKey(0)
-
-        input("Press Enter to continue...")
 
     # Homogenous version of undistorted points
-    pts1_h = np.hstack([u_pts1, np.ones((u_pts1.shape[0], 1))])
-    pts2_h = np.hstack([u_pts2, np.ones((u_pts2.shape[0], 1))])
+    # pts1_h = np.hstack([u_pts1, np.ones((u_pts1.shape[0], 1))])
+    # pts2_h = np.hstack([u_pts2, np.ones((u_pts2.shape[0], 1))])
 
-    R1, R2, P1, P2, Q, roi_left, roi_right = cv2.stereoRectify(k1, d1, k2, d2, frame2.shape[::-1], R_est, t_est)
-    constraint = np.diagonal(np.dot(pts2_h, np.dot(E, pts1_h.T)))
+    # constraint = np.diagonal(np.dot(pts2_h, np.dot(E, pts1_h.T)))
     # print(f'constraint shape is {constraint.shape}')
     # print(f'constraints are  {constraint}')
     # print(f'constraint mean is {np.mean(constraint)}')
@@ -219,7 +206,6 @@ def calculate_Rt_from_frames(frame1, frame2, k1, k2, d1, d2, T):
     # print(f'constraint max is {np.max(constraint)}')
 
 
-    return R_est, t_est, R1, R2, P1, P2, Q
 
 def publish_input_frames(videoHandlers):
     ts = dai.Clock.now()
@@ -534,12 +520,13 @@ if __name__ == "__main__":
                     cv2.waitKey(1)
                     continue
 
-                estimate_counts += 1
-                if estimate_counts < 20:
-                    print(f'Original T LR -> {original_t_lr[:3, 3]}')
+                if len(estimates['lr']) < 20:
+                    # print(f'Original T LR -> {original_t_lr[:3, 3]}')
                     R, T, R1, R2, P1, P2, Q = calculate_Rt_from_frames(left_frame, right_frame, left_k, right_k, left_d, right_d, original_t_lr)
                     if R is not None:
                         estimates["lr"].append((R, T, R1, R2, P1, P2, Q))
+                        estimate_counts += 1
+
 
                     # rot = Rotation.from_matrix(R1)
                     # print(f'Rotation Left matrix is {rot.as_euler("xyz", degrees=True)}')
@@ -559,6 +546,7 @@ if __name__ == "__main__":
                         # print(f'Rotation Right RGB matrix is {rot.as_euler("xyz", degrees=True)}')
 
                 else:
+                    estimate_counts += 1
                     print(f'Count estimate is {estimate_counts}')
                     img_shape = left_rect_frame.shape[::-1]
                     M1 = left_k
@@ -568,6 +556,8 @@ if __name__ == "__main__":
 
                     for i in range(len(estimates["lr"])):
                         R, T, R1, R2, P1, P2, Q = estimates["lr"][i]
+                        rot = Rotation.from_matrix(R)
+                        print(f'Rotation matrix is {rot.as_euler("xyz", degrees=True)}')
                         rot = Rotation.from_matrix(R1)
                         print(f'Rotation Left matrix is {rot.as_euler("xyz", degrees=True)}')
                         rot = Rotation.from_matrix(R2)
@@ -587,9 +577,10 @@ if __name__ == "__main__":
                         if i not in epipolar_list["lr"]:
                             epipolar_list["lr"][i] = []
                         epipolar_list["lr"][i].append(stereo_epipolar)
+                        print("Epipolar error is -----> ", stereo_epipolar)
                         if debug:
                             cv2.imshow("lr", disp_image)
-                        cv2.waitKey(2)
+                        cv2.waitKey(0)
                         # if stereo_epipolar > epipolar_threshold:
                         #     print(f"Stereo epipolar error: {stereo_epipolar} is higher than threshold {epipolar_threshold}")
                         #     continue
