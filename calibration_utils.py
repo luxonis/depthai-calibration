@@ -314,7 +314,7 @@ class StereoCalibration(object):
                     len(marker_corners), img_pth.name))
             if len(marker_corners) > 0:
                 ret, charuco_corners, charuco_ids = cv2.aruco.interpolateCornersCharuco(
-                    marker_corners, ids, gray, self.board)
+                    marker_corners, ids, gray, self.board, minMarkers = 1)
 
                 if charuco_corners is not None and charuco_ids is not None and len(charuco_corners) > 3:
 
@@ -896,9 +896,9 @@ class StereoCalibration(object):
                                                                             rejectedCorners=rejectedImgPoints)
 
             res2_l = cv2.aruco.interpolateCornersCharuco(
-                marker_corners_l, ids_l, image_data_pair[0], self.board)
+                marker_corners_l, ids_l, image_data_pair[0], self.board, minMarkers = 1)
             res2_r = cv2.aruco.interpolateCornersCharuco(
-                marker_corners_r, ids_r, image_data_pair[1], self.board)
+                marker_corners_r, ids_r, image_data_pair[1], self.board, minMarkers = 1)
 
             if res2_l[1] is not None and res2_r[2] is not None and len(res2_l[1]) > 3 and len(res2_r[1]) > 3:
 
@@ -1151,9 +1151,9 @@ class StereoCalibration(object):
                 print(f'Marekrs length for pair {i} is: L {len(marker_corners_l)} | R {len(marker_corners_r)} ')
             #print(f'Marekrs length l is {len(marker_corners_l)}')
             res2_l = cv2.aruco.interpolateCornersCharuco(
-                marker_corners_l, ids_l, image_data_pair[0], self.board)
+                marker_corners_l, ids_l, image_data_pair[0], self.board, minMarkers = 1)
             res2_r = cv2.aruco.interpolateCornersCharuco(
-                marker_corners_r, ids_r, image_data_pair[1], self.board)
+                marker_corners_r, ids_r, image_data_pair[1], self.board, minMarkers = 1)
             img_concat = cv2.hconcat([image_data_pair[0], image_data_pair[1]])
             img_concat = cv2.cvtColor(img_concat, cv2.COLOR_GRAY2RGB)
             line_row = 0
