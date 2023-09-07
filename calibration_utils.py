@@ -12,7 +12,7 @@ import cv2.aruco as aruco
 from pathlib import Path
 from functools import reduce
 from collections import deque
-from typing import Dict, Any, Optional, List, Union, Callable
+from typing import Optional
 # Creates a set of 13 polygon coordinates
 rectProjectionMode = 0
 
@@ -89,7 +89,7 @@ def polygon_from_image_name(image_name):
 class StereoCalibration(object):
     """Class to Calculate Calibration and Rectify a Stereo Camera."""
 
-    def __init__(self, traceLevel: Optional[float] = 1.0, outputScaleFactor: Optional[float] = 0.5, disableCamera: Optional[list] = None):
+    def __init__(self, traceLevel: Optional[float] = 1.0, outputScaleFactor: Optional[float] = 0.5, disableCamera: Optional[list] = []):
         self.traceLevel = traceLevel
         self.output_scale_factor = outputScaleFactor
         self.disableCamera = disableCamera
