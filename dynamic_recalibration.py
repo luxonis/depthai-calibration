@@ -65,7 +65,7 @@ ransacMethod = cv2.RANSAC
 #     ransacMethod = cv2.USAC_MAGSAC
 #     print('Using MAGSAC')
 
-feature_helper = FeaturesHelper(0.3, 1)
+feature_helper = FeaturesHelper(0.5, 1)
 
 fig = plt.figure()
 ax = fig.add_subplot(111, projection='3d')
@@ -536,6 +536,7 @@ if __name__ == "__main__":
                         print(f'Original T RGB-R -> {original_t_rgb[:3, 3]}')
 
                         rgb_frame = rgb_camera_queue.get().getCvFrame()
+                        print(f'RGB frame size is --------- {rgb_frame.shape}')
                         R, T, R1, R2, P1, P2, Q = calculate_Rt_from_frames(rgb_frame, right_frame, rgb_k, right_k, rgb_d, right_d, original_t_rgb)
                         # rgbR = np.linalg.inv(rgbR) #right to rgb rotation
                         estimates["rgb"].append((R, T, R1, R2, P1, P2, Q))
@@ -580,7 +581,7 @@ if __name__ == "__main__":
                         print("Epipolar error is -----> ", stereo_epipolar)
                         if debug:
                             cv2.imshow("lr", disp_image)
-                        cv2.waitKey(0)
+                        cv2.waitKey(1)
                         # if stereo_epipolar > epipolar_threshold:
                         #     print(f"Stereo epipolar error: {stereo_epipolar} is higher than threshold {epipolar_threshold}")
                         #     continue
@@ -620,32 +621,48 @@ if __name__ == "__main__":
                 traceback.print_exc()
                 exit(1)
                 continue
-
-        for i in range(len(estimates["lr"])):
-            print(f'lr epipolar errors from {i}\'th estimation are : {epipolar_list["lr"][i]}')
-        for i in range(len(estimates["rgb"])):
-            print(f'rgb-r epipolar errors from {i}\'th estimation are : {epipolar_list["rgb"][i]}')
         
-        exit(1)
+        mean_ep_list_lr = []
+        mean_ep_list_rgb = []
+        min_ep_lr_idx = None
+        min_ep_rgb_idx = None
+        for i in range(len(estimates["lr"])):
+            mean_epipolar_error = sum(epipolar_list["lr"][i]) / len(epipolar_list["lr"][i])
+            mean_ep_list_lr.append(mean_epipolar_error)
+            print(f'lr Mean epipolar error from {i}\'th estimation are : {mean_epipolar_error:.4f}')
+        for i in range(len(estimates["rgb"])):
+            mean_epipolar_error = sum(epipolar_list["rgb"][i]) / len(epipolar_list["rgb"][i])
+            mean_ep_list_rgb.append(mean_epipolar_error)
+            print(f'rgb-r Mean epipolar error from {i}\'th estimation are : {mean_epipolar_error:.4f}')
+        
+        min_ep_lr_idx = mean_ep_list_lr.index(min(mean_ep_list_lr))
+
         #save rotation data
+        R, T, R1, R2, P1, P2, Q = estimates["lr"][min_ep_lr_idx]
         lrSpecExtrinsics = calibration_handler.getCameraExtrinsics(left_camera, right_camera, True)
         specTranslation = (lrSpecExtrinsics[0][3], lrSpecExtrinsics[1][3], lrSpecExtrinsics[2][3])
+
         lrCompExtrinsics = calibration_handler.getCameraExtrinsics(left_camera, right_camera, False)
         compTranslation = (lrCompExtrinsics[0][3], lrCompExtrinsics[1][3], lrCompExtrinsics[2][3])
+
         calibration_handler.setCameraExtrinsics(left_camera, right_camera, R, compTranslation, specTranslation)
 
         calibration_handler.setStereoLeft(left_camera, R1)
         calibration_handler.setStereoRight(right_camera, R2)
 
         if rgbEnabled:
+            min_ep_rgb_idx = mean_ep_list_rgb.index(min(mean_ep_list_rgb))
+            rgbR, rgbT, _, _, _, _, _ = estimates["rgb"][min_ep_rgb_idx]
+
             rgbSpecExtrinsics = calibration_handler.getCameraExtrinsics(right_camera, rgb_camera, True)
             specTranslation = (rgbSpecExtrinsics[0][3], rgbSpecExtrinsics[1][3], rgbSpecExtrinsics[2][3])
+
             rgbCompExtrinsics = calibration_handler.getCameraExtrinsics(right_camera, rgb_camera, False)
             compTranslation = (rgbCompExtrinsics[0][3], rgbCompExtrinsics[1][3], rgbCompExtrinsics[2][3])
+
             calibration_handler.setCameraExtrinsics(right_camera, rgb_camera, rgbR, compTranslation, specTranslation)
 
-        #flash updates
-
+        #flash updates to EEPROM
         is_write_successful = False
         if not dryRun:
             calibFile = str((Path(__file__).parent / Path(f"calib_{device.getMxId()}_backup.json")).resolve().absolute())
@@ -667,5 +684,5 @@ if __name__ == "__main__":
             if rgbEnabled:
                 image_data_pairs.append((img_rgb, img_rgb2))
 
-            display_rectification(image_data_pairs)
+            # display_rectification(image_data_pairs)
 

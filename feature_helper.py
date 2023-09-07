@@ -2,9 +2,10 @@ import numpy as np
 import cv2
 import sys
 
+debug = False
 
 class FeaturesHelper:
-    def __init__(self, filter_ratio = 0.75, reprojection_threshold = 3):
+    def __init__(self, filter_ratio = 0.6, reprojection_threshold = 3):
         self.sift = cv2.SIFT_create()
         self.configMatcher()
         self.reprojection_threshold = reprojection_threshold
@@ -19,10 +20,36 @@ class FeaturesHelper:
         kp_left, des_left = self.sift.detectAndCompute(left_image, None)
         kp_right, des_right = self.sift.detectAndCompute(right_image, None)
 
-        # if len(kp_left) < 25 or len(kp_right) < 25:
-        #     return None, None, None, None
+        # sorted_indices = [i[0] for i in sorted(enumerate(kp_left), key=lambda x: x[1].response, reverse=True)]
+        # kp_left = [kp_left[i] for i in sorted_indices]
+        # # des_left = [des_left[i] for i in sorted_indices]
+        # des_left = des_left[sorted_indices, :]
 
-        # print(f'length of keypoints: {len(kp_left)}, {len(kp_right)}')
+        # sorted_indices = [i[0] for i in sorted(enumerate(kp_right), key=lambda x: x[1].response, reverse=True)]
+        # kp_right = [kp_right[i] for i in sorted_indices]
+        # des_right = des_right[sorted_indices, :]
+    
+        strengths_left = [kp.response for kp in kp_left]
+        strengths_right = [kp.response for kp in kp_right]
+
+        percentile_threshold = np.percentile(strengths_left, 70)
+        kp_left = [kp_left[i] for i, response in enumerate(strengths_left) if response >= percentile_threshold]
+        des_left = des_left[np.array(strengths_left) >= percentile_threshold, :]
+
+        percentile_threshold = np.percentile(strengths_right, 70)
+        kp_right = [kp_right[i] for i, response in enumerate(strengths_right) if response >= percentile_threshold]
+        des_right = des_right[np.array(strengths_right) >= percentile_threshold, :]
+
+        if debug:
+            print(f'SIze of kps is {len(kp_right)} and {len(kp_right)}')
+            print(f'SIze of des is {len(des_left)} and {len(des_right)}')
+
+            print(f'Median response ----------> {np.median(strengths_left)} --> {np.median(strengths_right)}')
+            print(f'Mean response ----------> {np.mean(strengths_left)} --> {np.mean(strengths_right)}')
+            print(f'Max response ----------> {np.max(strengths_left)} --> {np.max(strengths_right)}')
+            print(f'Min response ----------> {np.min(strengths_left)} --> {np.min(strengths_right)}')
+
+            print(f'percentile threshold value is  -------------- {percentile_threshold}')
 
 
         kp_left_filtered,\
@@ -87,10 +114,13 @@ class FeaturesHelper:
             right_pt = kp_right[i].pt
             left_pt_i = (int(left_pt[0]), int(left_pt[1]))
             right_pt_i = (size[1] + int(right_pt[0]), int(right_pt[1]))
-
+            
+            epiploar_error = abs(left_pt[1] - right_pt[1])
             cv2.circle(horStack, left_pt_i, radius, red, thickness)
             cv2.circle(horStack, right_pt_i, radius, red, thickness)
-            horStack = cv2.line(horStack, left_pt_i, right_pt_i, green, thickness)
+            curr_color = green if epiploar_error < 0.7 else red
+            
+            horStack = cv2.line(horStack, left_pt_i, right_pt_i, curr_color, thickness)
 
         dest = cv2.resize(horStack, (0, 0), fx = 0.5, fy= 0.5, interpolation=cv2.INTER_AREA)
         return dest
