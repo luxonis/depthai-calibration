@@ -89,6 +89,8 @@ class FeaturesHelper:
 
 
         # this is just to get inliers
+        # TODO(saching12): Check if this keeps only the points on the plane ? Since it is a perspective transform validator
+        # If that is how it is doing. that means we are filtering the planar points.
         M, mask = cv2.findHomography(pts_left_filtered, pts_right_filtered, method=cv2.RANSAC, ransacReprojThreshold=self.reprojection_threshold)
         matchesMask = mask.ravel().tolist()
         for i in reversed(range(len(pts_left_filtered))):
