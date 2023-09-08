@@ -77,8 +77,8 @@ def select_polygon_coords(p_coordinates, indexes):
         return [p_coordinates[i] for i in indexes]
 
 
-def image_filename(stream_name, polygon_index, total_num_of_captured_images):
-    return "{stream_name}_p{polygon_index}_{total_num_of_captured_images}.png".format(stream_name=stream_name, polygon_index=polygon_index, total_num_of_captured_images=total_num_of_captured_images)
+def image_filename(polygon_index, total_num_of_captured_images):
+    return "p{polygon_index}_{total_num_of_captured_images}.png".format(stream_name=stream_name, polygon_index=polygon_index, total_num_of_captured_images=total_num_of_captured_images)
 
 
 def polygon_from_image_name(image_name):
@@ -89,7 +89,7 @@ def polygon_from_image_name(image_name):
 class StereoCalibration(object):
     """Class to Calculate Calibration and Rectify a Stereo Camera."""
 
-    def __init__(self, traceLevel: Optional[float] = 1.0, outputScaleFactor: Optional[float] = 0.5, disableCamera: Optional[list] = []):
+    def __init__(self, traceLevel: float = 1.0, outputScaleFactor: float = 0.5, disableCamera: list = []):
         self.traceLevel = traceLevel
         self.output_scale_factor = outputScaleFactor
         self.disableCamera = disableCamera
