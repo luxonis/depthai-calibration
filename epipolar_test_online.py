@@ -31,6 +31,7 @@ def getDevice(calib):
             print('Name of left camera: ', name)
             if name == 'OV9282':
                 camLeft = pipeline.create(dai.node.MonoCamera)
+                camLeft.setBoardSocket(dai.CameraBoardSocket.CAM_B)
                 camLeft.setResolution(dai.MonoCameraProperties.SensorResolution.THE_800_P)
             xoutLeft = pipeline.create(dai.node.XLinkOut)
             xoutLeft.setStreamName("left")
@@ -40,6 +41,7 @@ def getDevice(calib):
             camRight = None
             if name == 'OV9282':
                 camRight = pipeline.create(dai.node.MonoCamera)
+                camRight.setBoardSocket(dai.CameraBoardSocket.CAM_C)
                 camRight.setResolution(dai.MonoCameraProperties.SensorResolution.THE_800_P)
             xoutRight = pipeline.create(dai.node.XLinkOut)
             xoutRight.setStreamName("right")
@@ -51,7 +53,7 @@ def getDevice(calib):
 def evaluateDevice(device, calibHandler):
     left_queue = device.getOutputQueue(name="left", maxSize=4, blocking=False)
     right_queue = device.getOutputQueue(name="right", maxSize=4, blocking=False)
-    calibHandler.eepromToJsonFile('calibx.json')
+
     left_k, w, h = calibHandler.getDefaultIntrinsics(dai.CameraBoardSocket.CAM_B)
     right_k, _, _ = calibHandler.getDefaultIntrinsics(dai.CameraBoardSocket.CAM_C)
     left_k = np.array(left_k)
@@ -85,6 +87,8 @@ def evaluateDevice(device, calibHandler):
         left_image = left_queue.get().getCvFrame()
         right_image = right_queue.get().getCvFrame()
         print(f'left_image shape: {left_image.shape}, right_image shape: {right_image.shape}')
+        cv2.imshow("left_image", left_image)
+        cv2.imshow("right_image", right_image)
 
         left_hor_undistorted = cv2.remap(left_image, left_mapx, left_mapy, cv2.INTER_CUBIC)
         right_hor_undistorted = cv2.remap(right_image, right_mapx, right_mapy, cv2.INTER_CUBIC)
