@@ -12,6 +12,7 @@ import cv2.aruco as aruco
 from pathlib import Path
 from functools import reduce
 from collections import deque
+from typing import Optional
 # Creates a set of 13 polygon coordinates
 rectProjectionMode = 0
 
@@ -76,8 +77,8 @@ def select_polygon_coords(p_coordinates, indexes):
         return [p_coordinates[i] for i in indexes]
 
 
-def image_filename(stream_name, polygon_index, total_num_of_captured_images):
-    return "{stream_name}_p{polygon_index}_{total_num_of_captured_images}.png".format(stream_name=stream_name, polygon_index=polygon_index, total_num_of_captured_images=total_num_of_captured_images)
+def image_filename(polygon_index, total_num_of_captured_images):
+    return "p{polygon_index}_{total_num_of_captured_images}.png".format(stream_name=stream_name, polygon_index=polygon_index, total_num_of_captured_images=total_num_of_captured_images)
 
 
 def polygon_from_image_name(image_name):
@@ -88,9 +89,11 @@ def polygon_from_image_name(image_name):
 class StereoCalibration(object):
     """Class to Calculate Calibration and Rectify a Stereo Camera."""
 
-    def __init__(self):
-        self.traceLevel = 0
-        self.output_scale_factor = 1.0
+    def __init__(self, traceLevel: float = 1.0, outputScaleFactor: float = 0.5, disableCamera: list = []):
+        self.traceLevel = traceLevel
+        self.output_scale_factor = outputScaleFactor
+        self.disableCamera = disableCamera
+
         """Class to Calculate Calibration and Rectify a Stereo Camera."""
 
     def calibrate(self, board_config, filepath, square_size, mrk_size, squaresX, squaresY, camera_model, enable_disp_rectify):
@@ -117,59 +120,61 @@ class StereoCalibration(object):
         assert mrk_size != None,  "ERROR: marker size not set"
         for camera in board_config['cameras'].keys():
             cam_info = board_config['cameras'][camera]
-            images_path = filepath + '/' + cam_info['name']
-            image_files = glob.glob(images_path + "/*")
-            image_files.sort()
-            for im in image_files:
-                frame = cv2.imread(im)
-                height, width, _ = frame.shape
-                widthRatio = resizeWidth / width
-                heightRatio = resizeHeight / height
-                if (widthRatio > 0.8 and heightRatio > 0.8 and widthRatio <= 1.0 and heightRatio <= 1.0) or (widthRatio > 1.2 and heightRatio > 1.2) or (resizeHeight == 0):
-                    resizeWidth = width
-                    resizeHeight = height
-                break
+            if cam_info["name"] not in self.disableCamera:
+                images_path = filepath + '/' + cam_info['name']
+                image_files = glob.glob(images_path + "/*")
+                image_files.sort()
+                for im in image_files:
+                    frame = cv2.imread(im)
+                    height, width, _ = frame.shape
+                    widthRatio = resizeWidth / width
+                    heightRatio = resizeHeight / height
+                    if (widthRatio > 0.8 and heightRatio > 0.8 and widthRatio <= 1.0 and heightRatio <= 1.0) or (widthRatio > 1.2 and heightRatio > 1.2) or (resizeHeight == 0):
+                        resizeWidth = width
+                        resizeHeight = height
+                    break
         for camera in board_config['cameras'].keys():
             cam_info = board_config['cameras'][camera]
-            print(
-                '<------------Calibrating {} ------------>'.format(cam_info['name']))
-            images_path = filepath + '/' + cam_info['name']
-            ret, intrinsics, dist_coeff, _, _, size, coverageImage = self.calibrate_intrinsics(
-                images_path, cam_info['hfov'])
-            cam_info['intrinsics'] = intrinsics
-            cam_info['dist_coeff'] = dist_coeff
-            cam_info['size'] = size # (Width, height)
-            cam_info['reprojection_error'] = ret
-            print("Reprojection error of {0}: {1}".format(
-                cam_info['name'], ret))
-            if self.traceLevel == 3 or self.traceLevel == 10:
-                print("Estimated intrinsics of {0}: \n {1}".format(
-                cam_info['name'], intrinsics))
-            
-            coverage_name = cam_info['name']
-            print_text = f'Coverage Image of {coverage_name} with reprojection error of {round(ret,5)}'
-            height, width, _ = coverageImage.shape
+            if cam_info["name"] not in self.disableCamera:
+                print(
+                    '<------------Calibrating {} ------------>'.format(cam_info['name']))
+                images_path = filepath + '/' + cam_info['name']
+                ret, intrinsics, dist_coeff, _, _, size, coverageImage = self.calibrate_intrinsics(
+                    images_path, cam_info['hfov'])
+                cam_info['intrinsics'] = intrinsics
+                cam_info['dist_coeff'] = dist_coeff
+                cam_info['size'] = size # (Width, height)
+                cam_info['reprojection_error'] = ret
+                print("Reprojection error of {0}: {1}".format(
+                    cam_info['name'], ret))
+                if self.traceLevel == 3 or self.traceLevel == 10:
+                    print("Estimated intrinsics of {0}: \n {1}".format(
+                    cam_info['name'], intrinsics))
 
-            if width > resizeWidth and height > resizeHeight:
-                coverageImage = cv2.resize(
-                coverageImage, (0, 0), fx= resizeWidth / width, fy= resizeWidth / width)
+                coverage_name = cam_info['name']
+                print_text = f'Coverage Image of {coverage_name} with reprojection error of {round(ret,5)}'
+                height, width, _ = coverageImage.shape
 
-            height, width, _ = coverageImage.shape
-            if height > resizeHeight:
-                height_offset = (height - resizeHeight)//2
-                coverageImage = coverageImage[height_offset:height_offset+resizeHeight, :]
+                if width > resizeWidth and height > resizeHeight:
+                    coverageImage = cv2.resize(
+                    coverageImage, (0, 0), fx= resizeWidth / width, fy= resizeWidth / width)
 
-            height, width, _ = coverageImage.shape
-            height_offset = (resizeHeight - height)//2
-            width_offset = (resizeWidth - width)//2
-            subImage = np.pad(coverageImage, ((height_offset, height_offset), (width_offset, width_offset), (0, 0)), 'constant', constant_values=0)
-            cv2.putText(subImage, print_text, (50, 50+height_offset), cv2.FONT_HERSHEY_SIMPLEX, 2*coverageImage.shape[0]/1750, (0, 0, 0), 2)
-            if combinedCoverageImage is None:
-                combinedCoverageImage = subImage
-            else:
-                combinedCoverageImage = np.hstack((combinedCoverageImage, subImage))
-            coverage_file_path = filepath + '/' + coverage_name + '_coverage.png'
-            cv2.imwrite(coverage_file_path, subImage)
+                height, width, _ = coverageImage.shape
+                if height > resizeHeight:
+                    height_offset = (height - resizeHeight)//2
+                    coverageImage = coverageImage[height_offset:height_offset+resizeHeight, :]
+
+                height, width, _ = coverageImage.shape
+                height_offset = (resizeHeight - height)//2
+                width_offset = (resizeWidth - width)//2
+                subImage = np.pad(coverageImage, ((height_offset, height_offset), (width_offset, width_offset), (0, 0)), 'constant', constant_values=0)
+                cv2.putText(subImage, print_text, (50, 50+height_offset), cv2.FONT_HERSHEY_SIMPLEX, 2*coverageImage.shape[0]/1750, (0, 0, 0), 2)
+                if combinedCoverageImage is None:
+                    combinedCoverageImage = subImage
+                else:
+                    combinedCoverageImage = np.hstack((combinedCoverageImage, subImage))
+                coverage_file_path = filepath + '/' + coverage_name + '_coverage.png'
+                cv2.imwrite(coverage_file_path, subImage)
 
         combinedCoverageImage = cv2.resize(combinedCoverageImage, (0, 0), fx=self.output_scale_factor, fy=self.output_scale_factor)
         if enable_disp_rectify:
@@ -179,66 +184,69 @@ class StereoCalibration(object):
         
         for camera in board_config['cameras'].keys():
             left_cam_info = board_config['cameras'][camera]
-            if 'extrinsics' in left_cam_info:
-                if 'to_cam' in left_cam_info['extrinsics']:
-                    left_cam = camera
-                    right_cam = left_cam_info['extrinsics']['to_cam']
-                    left_path = filepath + '/' + left_cam_info['name']
+            if str(left_cam_info["name"]) not in self.disableCamera:
+                if 'extrinsics' in left_cam_info:
+                    if 'to_cam' in left_cam_info['extrinsics']:
+                        left_cam = camera
+                        right_cam = left_cam_info['extrinsics']['to_cam']
+                        left_path = filepath + '/' + left_cam_info['name']
+    
+                        right_cam_info = board_config['cameras'][left_cam_info['extrinsics']['to_cam']]
+                        if str(right_cam_info["name"]) not in self.disableCamera:
+                            right_path = filepath + '/' + right_cam_info['name']
+                            print('<-------------Extrinsics calibration of {} and {} ------------>'.format(
+                                left_cam_info['name'], right_cam_info['name']))
+    
+                            specTranslation = left_cam_info['extrinsics']['specTranslation']
+                            rot = left_cam_info['extrinsics']['rotation']
+    
+                            translation = np.array(
+                                [specTranslation['x'], specTranslation['y'], specTranslation['z']], dtype=np.float32)
+                            rotation = Rotation.from_euler(
+                                'xyz', [rot['r'], rot['p'], rot['y']], degrees=True).as_matrix().astype(np.float32)
+    
+                            extrinsics = self.calibrate_extrinsics(left_path, right_path, left_cam_info['intrinsics'], left_cam_info[
+                                                                   'dist_coeff'], right_cam_info['intrinsics'], right_cam_info['dist_coeff'], translation, rotation)
+                            if extrinsics[0] == -1:
+                                return -1, extrinsics[1]
+    
+                            if board_config['stereo_config']['left_cam'] == left_cam and board_config['stereo_config']['right_cam'] == right_cam:
+                                board_config['stereo_config']['rectification_left'] = extrinsics[3]
+                                board_config['stereo_config']['rectification_right'] = extrinsics[4]
+                                board_config['stereo_config']['p_left'] = extrinsics[5]
+                                board_config['stereo_config']['p_right'] = extrinsics[6]
+                            elif board_config['stereo_config']['left_cam'] == right_cam and board_config['stereo_config']['right_cam'] == left_cam:
+                                board_config['stereo_config']['rectification_left'] = extrinsics[4]
+                                board_config['stereo_config']['rectification_right'] = extrinsics[3]
+                                board_config['stereo_config']['p_left'] = extrinsics[6]
+                                board_config['stereo_config']['p_right'] = extrinsics[5]
+    
+                            """ for stereoObj in board_config['stereo_config']:
+    
+                                if stereoObj['left_cam'] == left_cam and stereoObj['right_cam'] == right_cam and stereoObj['main'] == 1:
+                                    stereoObj['rectification_left'] = extrinsics[3]
+                                    stereoObj['rectification_right'] = extrinsics[4] """
+    
+                            print('<-------------Epipolar error of {} and {} ------------>'.format(
+                                left_cam_info['name'], right_cam_info['name']))
 
-                    right_cam_info = board_config['cameras'][left_cam_info['extrinsics']['to_cam']]
-                    right_path = filepath + '/' + right_cam_info['name']
-                    print('<-------------Extrinsics calibration of {} and {} ------------>'.format(
-                        left_cam_info['name'], right_cam_info['name']))
-
-                    specTranslation = left_cam_info['extrinsics']['specTranslation']
-                    rot = left_cam_info['extrinsics']['rotation']
-
-                    translation = np.array(
-                        [specTranslation['x'], specTranslation['y'], specTranslation['z']], dtype=np.float32)
-                    rotation = Rotation.from_euler(
-                        'xyz', [rot['r'], rot['p'], rot['y']], degrees=True).as_matrix().astype(np.float32)
-
-                    extrinsics = self.calibrate_extrinsics(left_path, right_path, left_cam_info['intrinsics'], left_cam_info[
-                                                           'dist_coeff'], right_cam_info['intrinsics'], right_cam_info['dist_coeff'], translation, rotation)
-                    if extrinsics[0] == -1:
-                        return -1, extrinsics[1]
-
-                    if board_config['stereo_config']['left_cam'] == left_cam and board_config['stereo_config']['right_cam'] == right_cam:
-                        board_config['stereo_config']['rectification_left'] = extrinsics[3]
-                        board_config['stereo_config']['rectification_right'] = extrinsics[4]
-                        board_config['stereo_config']['p_left'] = extrinsics[5]
-                        board_config['stereo_config']['p_right'] = extrinsics[6]
-                    elif board_config['stereo_config']['left_cam'] == right_cam and board_config['stereo_config']['right_cam'] == left_cam:
-                        board_config['stereo_config']['rectification_left'] = extrinsics[4]
-                        board_config['stereo_config']['rectification_right'] = extrinsics[3]
-                        board_config['stereo_config']['p_left'] = extrinsics[6]
-                        board_config['stereo_config']['p_right'] = extrinsics[5]
-
-                    """ for stereoObj in board_config['stereo_config']:
-
-                        if stereoObj['left_cam'] == left_cam and stereoObj['right_cam'] == right_cam and stereoObj['main'] == 1:
-                            stereoObj['rectification_left'] = extrinsics[3]
-                            stereoObj['rectification_right'] = extrinsics[4] """
-
-                    print('<-------------Epipolar error of {} and {} ------------>'.format(
-                        left_cam_info['name'], right_cam_info['name']))
-                    left_cam_info['extrinsics']['epipolar_error'] = self.test_epipolar_charuco(
-                                                                                        left_path, 
-                                                                                        right_path, 
-                                                                                        left_cam_info['intrinsics'], 
-                                                                                        left_cam_info['dist_coeff'], 
-                                                                                        right_cam_info['intrinsics'], 
-                                                                                        right_cam_info['dist_coeff'], 
-                                                                                        extrinsics[2], # Translation between left and right Cameras
-                                                                                        extrinsics[3], # Left Rectification rotation 
-                                                                                        extrinsics[4], # Right Rectification rotation 
-                                                                                        extrinsics[5], # Left Rectification Intrinsics
-                                                                                        extrinsics[6]) # Right Rectification Intrinsics
-
-                    left_cam_info['extrinsics']['rotation_matrix'] = extrinsics[1]
-                    left_cam_info['extrinsics']['translation'] = extrinsics[2]
-                    left_cam_info['extrinsics']['stereo_error'] = extrinsics[0]
-
+                            left_cam_info['extrinsics']['epipolar_error'] = self.test_epipolar_charuco(
+                                                                                            left_path, 
+                                                                                            right_path, 
+                                                                                            left_cam_info['intrinsics'], 
+                                                                                            left_cam_info['dist_coeff'], 
+                                                                                            right_cam_info['intrinsics'], 
+                                                                                            right_cam_info['dist_coeff'], 
+                                                                                            extrinsics[2], # Translation between left and right Cameras
+                                                                                            extrinsics[3], # Left Rectification rotation 
+                                                                                            extrinsics[4], # Right Rectification rotation 
+                                                                                            extrinsics[5], # Left Rectification Intrinsics
+                                                                                            extrinsics[6]) # Right Rectification Intrinsics
+    
+                            left_cam_info['extrinsics']['rotation_matrix'] = extrinsics[1]
+                            left_cam_info['extrinsics']['translation'] = extrinsics[2]
+                            left_cam_info['extrinsics']['stereo_error'] = extrinsics[0]
+    
         return 1, board_config
 
     def draw_corners(self, charuco_corners, displayframe):
@@ -373,7 +381,7 @@ class StereoCalibration(object):
         else:
             print('Fisheye--------------------------------------------------')
             ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors = self.calibrate_fisheye(
-                allCorners, allIds, imsize)
+                allCorners, allIds, imsize, hfov)
             if self.traceLevel == 4 or self.traceLevel == 5 or self.traceLevel == 10:
                 self.undistort_visualization(
                     image_files, camera_matrix, distortion_coefficients, imsize)
@@ -548,7 +556,7 @@ class StereoCalibration(object):
             print(perViewErrors)
         return ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors
 
-    def calibrate_fisheye(self, allCorners, allIds, imsize):
+    def calibrate_fisheye(self, allCorners, allIds, imsize, hfov):
         one_pts = self.board.chessboardCorners
         obj_points = []
         for i in range(len(allIds)):
@@ -558,8 +566,9 @@ class StereoCalibration(object):
             obj_points.append(np.array(obj_pts_sub, dtype=np.float32))
 
         cameraMatrixInit = np.array([[907.84859625,   0.0        , 995.15888273],
-                                     [  0.0       ,  889.29269629, 627.49748034],
-                                     [  0.0       ,    0.0       ,    1.0      ]])
+                                      [  0.0       ,  889.29269629, 627.49748034],
+                                      [  0.0       ,    0.0       ,    1.0      ]])
+
  
         print("Camera Matrix initialization.............")
         print(cameraMatrixInit)
@@ -567,7 +576,7 @@ class StereoCalibration(object):
         flags |= cv2.fisheye.CALIB_CHECK_COND 
         flags |= cv2.fisheye.CALIB_USE_INTRINSIC_GUESS 
         flags |= cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC 
-        # flags |= cv2.fisheye.CALIB_FIX_SKEW
+        #flags |= cv2.fisheye.CALIB_FIX_SKEW
         distCoeffsInit = np.zeros((4, 1))
         term_criteria = (cv2.TERM_CRITERIA_COUNT +
                          cv2.TERM_CRITERIA_EPS, 50000, 1e-9)
