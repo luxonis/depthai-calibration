@@ -78,7 +78,7 @@ def select_polygon_coords(p_coordinates, indexes):
 
 
 def image_filename(polygon_index, total_num_of_captured_images):
-    return "p{polygon_index}_{total_num_of_captured_images}.png".format(stream_name=stream_name, polygon_index=polygon_index, total_num_of_captured_images=total_num_of_captured_images)
+    return "p{polygon_index}_{total_num_of_captured_images}.png".format(polygon_index=polygon_index, total_num_of_captured_images=total_num_of_captured_images)
 
 
 def polygon_from_image_name(image_name):
