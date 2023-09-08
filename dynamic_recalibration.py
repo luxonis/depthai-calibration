@@ -148,14 +148,7 @@ def calculate_Rt_from_frames(frame1, frame2, k1, k2, d1, d2, T):
         print(f'Need at least {minKeypoints} keypoints!')
         return None, None, None, None, None, None, None
 
-    if debug:
-        img_frame = feature_helper.draw_features(frame1, frame2, kps1, kps2)
-        cv2.imshow("marked image ", img_frame)
-        # img=cv2.drawKeypoints(frame1, kps1, frame1, flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
-        # cv2.imshow("Left", img)
-        # img2=cv2.drawKeypoints(frame2, kps2, frame2, flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
-        # cv2.imshow("Right", img2)
-        cv2.waitKey(1)
+    img_frame = feature_helper.draw_features(frame1, frame2, kps1, kps2)
 
     # print(f'Type of pts1 is {type(pts1)}')
     pts1 = keypoint_to_point2f(kps1)
@@ -186,11 +179,11 @@ def calculate_Rt_from_frames(frame1, frame2, k1, k2, d1, d2, T):
             input("Press Enter to continue...")
 
         R1, R2, P1, P2, Q, roi_left, roi_right = cv2.stereoRectify(k1, d1, k2, d2, frame2.shape[::-1], R_est, t_est)
-        return R_est, t_est, R1, R2, P1, P2, Q
+        return R_est, t_est, R1, R2, P1, P2, Q, img_frame
 
     else:
         print(f'~~~~~~~~~~~~~~~~Could not find a valid rotation matrix')
-        return None, None, None, None, None, None, None
+        return None, None, None, None, None, None, None, None
 
 
     # Homogenous version of undistorted points
@@ -482,7 +475,7 @@ if __name__ == "__main__":
             original_t = calibration_handler.getCameraExtrinsics(rgb_camera, right_camera, False)
             original_t_rgb = np.array(original_t)
 
-        estimate_counts = 0
+        test_counts = 0
         estimates = {} 
         estimates["lr"] = []
         estimates["rgb"] = []
@@ -522,33 +515,36 @@ if __name__ == "__main__":
 
                 if len(estimates['lr']) < 20:
                     # print(f'Original T LR -> {original_t_lr[:3, 3]}')
-                    R, T, R1, R2, P1, P2, Q = calculate_Rt_from_frames(left_frame, right_frame, left_k, right_k, left_d, right_d, original_t_lr)
+                    R, T, R1, R2, P1, P2, Q, stack_image = calculate_Rt_from_frames(left_frame, right_frame, left_k, right_k, left_d, right_d, original_t_lr)
                     if R is not None:
                         estimates["lr"].append((R, T, R1, R2, P1, P2, Q))
-                        estimate_counts += 1
-
+                        if debug:
+                            cv2.imshow("lr", stack_image)
+                            cv2.waitKey(1)
 
                     # rot = Rotation.from_matrix(R1)
                     # print(f'Rotation Left matrix is {rot.as_euler("xyz", degrees=True)}')
                     # rot = Rotation.from_matrix(R2)
                     # print(f'Rotation Right matrix is {rot.as_euler("xyz", degrees=True)}')
-                    if rgbEnabled:
-                        print(f'Original T RGB-R -> {original_t_rgb[:3, 3]}')
+                if rgbEnabled and len(estimates["rgb"]) < 10:
+                    
+                    print(f'Original T RGB-R -> {original_t_rgb[:3, 3]}')
 
-                        rgb_frame = rgb_camera_queue.get().getCvFrame()
-                        print(f'RGB frame size is --------- {rgb_frame.shape}')
-                        R, T, R1, R2, P1, P2, Q = calculate_Rt_from_frames(rgb_frame, right_frame, rgb_k, right_k, rgb_d, right_d, original_t_rgb)
-                        # rgbR = np.linalg.inv(rgbR) #right to rgb rotation
-                        estimates["rgb"].append((R, T, R1, R2, P1, P2, Q))
+                    rgb_frame = rgb_camera_queue.get().getCvFrame()
+                    # print(f'RGB frame size is --------- {rgb_frame.shape}')
+                    Rrgb, Trgb, R1rgb, R2rgb, P1rgb, P2rgb, Qrgb, stack_img_rgb = calculate_Rt_from_frames(rgb_frame, right_frame, rgb_k, right_k, rgb_d, right_d, original_t_rgb)
+                    # rgbR = np.linalg.inv(rgbR) #right to rgb rotation
+                    if Rrgb is not None:
+                        estimates["rgb"].append((Rrgb, Trgb, R1rgb, R2rgb, P1rgb, P2rgb, Qrgb))
+                        if debug:
+                            cv2.imshow("rgb-r", stack_img_rgb)
+                            cv2.waitKey(1)
+                    # else:
+                    continue
 
-                        # rot = Rotation.from_matrix(R1)
-                        # print(f'Rotation Left RGB matrix is {rot.as_euler("xyz", degrees=True)}')
-                        # rot = Rotation.from_matrix(R2)
-                        # print(f'Rotation Right RGB matrix is {rot.as_euler("xyz", degrees=True)}')
-
-                else:
-                    estimate_counts += 1
-                    print(f'Count estimate is {estimate_counts}')
+                if len(estimates["lr"]) >= 20 :
+                    test_counts += 1
+                    print(f'Count test_counts is {test_counts}')
                     img_shape = left_rect_frame.shape[::-1]
                     M1 = left_k
                     M2 = right_k
@@ -560,9 +556,9 @@ if __name__ == "__main__":
                         rot = Rotation.from_matrix(R)
                         print(f'Rotation matrix is {rot.as_euler("xyz", degrees=True)}')
                         rot = Rotation.from_matrix(R1)
-                        print(f'Rotation Left matrix is {rot.as_euler("xyz", degrees=True)}')
+                        # print(f'Rotation Left matrix is {rot.as_euler("xyz", degrees=True)}')
                         rot = Rotation.from_matrix(R2)
-                        print(f'Rotation Right matrix is {rot.as_euler("xyz", degrees=True)}')
+                        # print(f'Rotation Right matrix is {rot.as_euler("xyz", degrees=True)}')
 
                         mapx_l, mapy_l = cv2.initUndistortRectifyMap(M1, d1, R1, M2, img_shape, cv2.CV_32FC1)
                         mapx_r, mapy_r = cv2.initUndistortRectifyMap(M2, d2, R2, M2, img_shape, cv2.CV_32FC1)
@@ -586,7 +582,7 @@ if __name__ == "__main__":
                         #     print(f"Stereo epipolar error: {stereo_epipolar} is higher than threshold {epipolar_threshold}")
                         #     continue
 
-                    if rgbEnabled:
+                    if rgbEnabled and len(estimates["rgb"]) >= 10:
                         M3 = rgb_k
                         d3 = rgb_d
 
@@ -608,7 +604,7 @@ if __name__ == "__main__":
                             # if rgb_epipolar > epipolar_threshold:
                             #     print(f"RGB epipolar {rgb_epipolar} is higher than threshold {epipolar_threshold}")
                             #     continue
-                if estimate_counts >= 30:
+                if test_counts >= 10:
                     print("Breaking------------------")
 
                     break

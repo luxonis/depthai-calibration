@@ -100,9 +100,12 @@ class FeaturesHelper:
         return kp_left_filtered, kp_right_filtered, np.array(des_left_filtered), np.array(des_right_filtered)
     
     def draw_features(self, left_image, right_image, kp_left, kp_right):
+        if len(left_image.shape) < 3:
+            left_image = cv2.cvtColor(left_image, cv2.COLOR_GRAY2BGR)
+        if len(right_image.shape) < 3:
+            right_image = cv2.cvtColor(right_image, cv2.COLOR_GRAY2BGR)
         horStack = np.hstack((left_image, right_image))
-        if len(horStack.shape) < 3:
-            horStack = cv2.cvtColor(horStack, cv2.COLOR_GRAY2BGR)
+
         green = (0, 255, 0)
         red = (0, 0, 255)
         # blue = (255, 0, 0)
