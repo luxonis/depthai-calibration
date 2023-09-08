@@ -89,7 +89,7 @@ def polygon_from_image_name(image_name):
 class StereoCalibration(object):
     """Class to Calculate Calibration and Rectify a Stereo Camera."""
 
-    def __init__(self, traceLevel: Optional[float] = 1.0, outputScaleFactor: Optional[float] = 0.5, disableCamera: Optional[list] = []):
+    def __init__(self, traceLevel: float = 1.0, outputScaleFactor: float = 0.5, disableCamera: list = []):
         self.traceLevel = traceLevel
         self.output_scale_factor = outputScaleFactor
         self.disableCamera = disableCamera
@@ -421,7 +421,6 @@ class StereoCalibration(object):
                 result = original
             images_left = [glob.glob(left_path + f"/{frame_name}")[0] for frame_name in result]
             images_right = [glob.glob(right_path + f"/{frame_name}")[0] for frame_name in result]
-        print(images_left,images_right)
         assert len(
             images_left) != 0, "ERROR: Images not found, check directory"
         assert len(
