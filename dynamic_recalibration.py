@@ -61,9 +61,9 @@ debug = options.debug
 enable3DVis = False
 
 ransacMethod = cv2.RANSAC
-# if cv2.__version__ >= "4.5.4":
-#     ransacMethod = cv2.USAC_MAGSAC
-#     print('Using MAGSAC')
+if cv2.__version__ >= "4.5.4":
+    ransacMethod = cv2.USAC_MAGSAC
+    print('Using MAGSAC')
 
 feature_helper = FeaturesHelper(0.5, 1)
 
@@ -138,7 +138,7 @@ def retrive_rt_from_essential_mat(E, pts1, pts2, k1, k2, d1, d2, T):
 # TODO: Track features across multiple frames and 
 # remove outliers and then use the features with better age to estimate the rotation.   
 def calculate_Rt_from_frames(frame1, frame2, k1, k2, d1, d2, T):
-    kps1, kps2, _, _ = feature_helper.getMatchedFeatures(frame1, frame2)
+    kps1, kps2, _, _ = feature_helper.getMatchedFeaturesWithNonPlanar(frame1, frame2)
     minKeypoints = 20
     t_original = T[:3, 3].reshape(-1, 1)
     t_norm = np.linalg.norm(t_original)

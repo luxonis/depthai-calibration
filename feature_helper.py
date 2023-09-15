@@ -2,55 +2,41 @@ import numpy as np
 import cv2
 import sys
 
+ransacMethod = cv2.RANSAC
+if cv2.__version__ >= "4.5.4":
+    ransacMethod = cv2.USAC_MAGSAC
+    print('Using MAGSAC')
+
+
 debug = False
 
 class FeaturesHelper:
-    def __init__(self, filter_ratio = 0.6, reprojection_threshold = 3):
+    def __init__(self, filter_ratio = 0.6, reprojection_threshold = 3, detectPlanar = False):
         self.sift = cv2.SIFT_create()
         self.configMatcher()
         self.reprojection_threshold = reprojection_threshold
         self.filter_ratio = filter_ratio
+        self.detectPlanar = detectPlanar
 
     def configMatcher(self, flann_index = 1, tree_count = 5, search_count = 50):
         index_params = dict(algorithm=flann_index, trees=tree_count)
         search_params = dict(checks=search_count)
         self.flann = cv2.FlannBasedMatcher(index_params, search_params)
 
+    def getFeatures(self, image):
+        kps, des = self.sift.detectAndCompute(image, None)
+            
+        strengths = [kp.response for kp in kps]
+
+        percentile_threshold = np.percentile(strengths, 70)
+        kp_res = [kps[i] for i, response in enumerate(strengths) if response >= percentile_threshold]
+        des_res = des[np.array(strengths) >= percentile_threshold, :]
+
+        return kp_res, des_res
+
     def getMatchedFeatures(self, left_image, right_image):
-        kp_left, des_left = self.sift.detectAndCompute(left_image, None)
-        kp_right, des_right = self.sift.detectAndCompute(right_image, None)
-
-        # sorted_indices = [i[0] for i in sorted(enumerate(kp_left), key=lambda x: x[1].response, reverse=True)]
-        # kp_left = [kp_left[i] for i in sorted_indices]
-        # # des_left = [des_left[i] for i in sorted_indices]
-        # des_left = des_left[sorted_indices, :]
-
-        # sorted_indices = [i[0] for i in sorted(enumerate(kp_right), key=lambda x: x[1].response, reverse=True)]
-        # kp_right = [kp_right[i] for i in sorted_indices]
-        # des_right = des_right[sorted_indices, :]
-    
-        strengths_left = [kp.response for kp in kp_left]
-        strengths_right = [kp.response for kp in kp_right]
-
-        percentile_threshold = np.percentile(strengths_left, 70)
-        kp_left = [kp_left[i] for i, response in enumerate(strengths_left) if response >= percentile_threshold]
-        des_left = des_left[np.array(strengths_left) >= percentile_threshold, :]
-
-        percentile_threshold = np.percentile(strengths_right, 70)
-        kp_right = [kp_right[i] for i, response in enumerate(strengths_right) if response >= percentile_threshold]
-        des_right = des_right[np.array(strengths_right) >= percentile_threshold, :]
-
-        if debug:
-            print(f'SIze of kps is {len(kp_right)} and {len(kp_right)}')
-            print(f'SIze of des is {len(des_left)} and {len(des_right)}')
-
-            print(f'Median response ----------> {np.median(strengths_left)} --> {np.median(strengths_right)}')
-            print(f'Mean response ----------> {np.mean(strengths_left)} --> {np.mean(strengths_right)}')
-            print(f'Max response ----------> {np.max(strengths_left)} --> {np.max(strengths_right)}')
-            print(f'Min response ----------> {np.min(strengths_left)} --> {np.min(strengths_right)}')
-
-            print(f'percentile threshold value is  -------------- {percentile_threshold}')
-
+        kp_left, des_left = self.getFeatures(left_image)
+        kp_right, des_right = self.getFeatures(right_image)
 
         kp_left_filtered,\
         kp_right_filtered,\
@@ -59,6 +45,38 @@ class FeaturesHelper:
                                                 kp_right,
                                                 des_left,
                                                 des_right)
+
+        return kp_left_filtered, kp_right_filtered, des_left_filtered, des_right_filtered
+
+    def getMatchedFeaturesWithPlanes(self, left_image, right_image):
+        kp_left_filtered,\
+        kp_right_filtered,\
+        des_left_filtered,\
+        des_right_filtered = self.getMatchedFeatures(left_image, right_image)
+
+        if len(kp_left_filtered) < 25 or len(kp_right_filtered) < 25:
+            return kp_left_filtered, kp_right_filtered, des_left_filtered, des_right_filtered
+
+        kp_left_filtered,\
+        kp_right_filtered,\
+        des_left_filtered,\
+        des_right_filtered = self.filterMatchesWithPlanes(kp_left_filtered, kp_right_filtered, des_left_filtered, des_right_filtered)
+
+        return kp_left_filtered, kp_right_filtered, des_left_filtered, des_right_filtered
+    
+    def getMatchedFeaturesWithNonPlanar(self, left_image, right_image):
+        kp_left_filtered,\
+        kp_right_filtered,\
+        des_left_filtered,\
+        des_right_filtered = self.getMatchedFeatures(left_image, right_image)
+
+        if len(kp_left_filtered) < 25 or len(kp_right_filtered) < 25:
+            return kp_left_filtered, kp_right_filtered, des_left_filtered, des_right_filtered
+
+        kp_left_filtered,\
+        kp_right_filtered,\
+        des_left_filtered,\
+        des_right_filtered = self.filterMatchesWithNonPlanar(kp_left_filtered, kp_right_filtered, des_left_filtered, des_right_filtered)
 
         return kp_left_filtered, kp_right_filtered, des_left_filtered, des_right_filtered
 
@@ -81,16 +99,12 @@ class FeaturesHelper:
                 kp_right_filtered.append(kp_right[m.trainIdx])
                 des_right_filtered.append(des_right[m.trainIdx])
 
-        if len(kp_left_filtered) < 25 or len(kp_right_filtered) < 25:
-            return kp_left_filtered, kp_right_filtered, np.array(des_left_filtered), np.array(des_right_filtered)
+        return kp_left_filtered, kp_right_filtered, des_left_filtered, des_right_filtered
 
-        pts_left_filtered = np.float32(pts_left_filtered)
-        pts_right_filtered = np.float32(pts_right_filtered)
+    def filterMatchesWithPlanes(self, kp_left_filtered, kp_right_filtered, des_left_filtered, des_right_filtered):
+        pts_left_filtered = keypoint_to_point2f(kp_left_filtered)
+        pts_right_filtered = keypoint_to_point2f(kp_right_filtered)
 
-
-        # this is just to get inliers
-        # TODO(saching12): Check if this keeps only the points on the plane ? Since it is a perspective transform validator
-        # If that is how it is doing. that means we are filtering the planar points.
         M, mask = cv2.findHomography(pts_left_filtered, pts_right_filtered, method=cv2.RANSAC, ransacReprojThreshold=self.reprojection_threshold)
         matchesMask = mask.ravel().tolist()
         for i in reversed(range(len(pts_left_filtered))):
@@ -99,8 +113,23 @@ class FeaturesHelper:
                 del kp_right_filtered[i]
                 del des_left_filtered[i]
                 del des_right_filtered[i]
-        return kp_left_filtered, kp_right_filtered, np.array(des_left_filtered), np.array(des_right_filtered)
-    
+        return kp_left_filtered, kp_right_filtered, des_left_filtered, des_right_filtered
+
+
+    def filterMatchesWithNonPlanar(self, kp_left_filtered, kp_right_filtered, des_left_filtered, des_right_filtered):
+        pts_left_filtered = keypoint_to_point2f(kp_left_filtered)
+        pts_right_filtered = keypoint_to_point2f(kp_right_filtered)
+        F, mask = cv2.findFundamentalMat(pts_left_filtered, pts_right_filtered, ransacMethod, self.reprojection_threshold)
+        matchesMask = mask.ravel().tolist()
+        for i in reversed(range(len(pts_left_filtered))):
+            if not matchesMask[i]:
+                del kp_left_filtered[i]
+                del kp_right_filtered[i]
+                del des_left_filtered[i]
+                del des_right_filtered[i]
+        return kp_left_filtered, kp_right_filtered, des_left_filtered, des_right_filtered
+
+
     def draw_features(self, left_image, right_image, kp_left, kp_right):
         if len(left_image.shape) < 3:
             left_image = cv2.cvtColor(left_image, cv2.COLOR_GRAY2BGR)
