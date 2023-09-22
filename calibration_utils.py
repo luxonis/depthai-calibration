@@ -226,7 +226,11 @@ class StereoCalibration(object):
                                 if stereoObj['left_cam'] == left_cam and stereoObj['right_cam'] == right_cam and stereoObj['main'] == 1:
                                     stereoObj['rectification_left'] = extrinsics[3]
                                     stereoObj['rectification_right'] = extrinsics[4] """
-    
+                            
+                            leftMode = board_config['stereo_config']['left_cam'] == left_cam and board_config['stereo_config']['right_cam'] == right_cam
+                            rightMode = board_config['stereo_config']['left_cam'] == right_cam and board_config['stereo_config']['right_cam'] == left_cam
+
+                            # if leftMode or rightMode or True:
                             print('<-------------Epipolar error of {} and {} ------------>'.format(
                                 left_cam_info['name'], right_cam_info['name']))
 
@@ -246,6 +250,15 @@ class StereoCalibration(object):
                             left_cam_info['extrinsics']['rotation_matrix'] = extrinsics[1]
                             left_cam_info['extrinsics']['translation'] = extrinsics[2]
                             left_cam_info['extrinsics']['stereo_error'] = extrinsics[0]
+                            # else:
+                            #     self.test_reprojection(left_path, 
+                            #                             right_path, 
+                            #                             left_cam_info['intrinsics'], 
+                            #                             left_cam_info['dist_coeff'], 
+                            #                             right_cam_info['intrinsics'], 
+                            #                             right_cam_info['dist_coeff'],
+                            #                             extrinsics[1],
+                            #                              extrinsics[2])
     
         return 1, board_config
 
@@ -317,9 +330,6 @@ class StereoCalibration(object):
                 gray, self.aruco_dictionary)
             marker_corners, ids, refusd, recoverd = cv2.aruco.refineDetectedMarkers(gray, self.board,
                                                                                     marker_corners, ids, rejectedCorners=rejectedImgPoints)
-            if self.traceLevel == 2 or self.traceLevel == 4 or self.traceLevel == 10:
-                print('{0} number of Markers corners detected in the image {1}'.format(
-                    len(marker_corners), img_pth.name))
             if len(marker_corners) > 0:
                 ret, charuco_corners, charuco_ids = cv2.aruco.interpolateCornersCharuco(
                     marker_corners, ids, gray, self.board, minMarkers = 1)
@@ -340,10 +350,23 @@ class StereoCalibration(object):
             else:
                 print(im + " Not found")
                 raise RuntimeError("Failed to detect markers in the image")
+
+            if self.traceLevel == 2 or self.traceLevel == 4 or self.traceLevel == 10:
+                print('{0} number of Markers corners detected in the image {1}'.format(
+                    len(marker_corners), img_pth.name))
+                print('{0} number of charuco corners detected in the image {1}'.format(
+                    len(charuco_corners), img_pth.name))
+
             if self.traceLevel == 2 or self.traceLevel == 4 or self.traceLevel == 10:
                 rgb_img = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-                cv2.aruco.drawDetectedMarkers(rgb_img, marker_corners, ids, (0, 0, 255))
-                cv2.aruco.drawDetectedCornersCharuco(rgb_img, charuco_corners, charuco_ids, (0, 255, 0))
+                # cv2.aruco.drawDetectedMarkers(rgb_img, marker_corners, ids, (0, 0, 255))
+                # cv2.aruco.drawDetectedCornersCharuco(rgb_img, charuco_corners, charuco_ids, (0, 255, 0))
+                marker_radius = 3  # Adjust as needed
+                color = (0, 0, 255)  # Red color for the markers
+                for corner in charuco_corners:
+                    corner_int = (int(corner[0][0]), int(corner[0][1]))
+                    cv2.circle(rgb_img, corner_int, marker_radius, color, -1)  # -1 to fill the circle
+
 
                 if rgb_img.shape[1] > 1920:
                     rgb_img = cv2.resize(rgb_img, (0, 0), fx=0.7, fy=0.7)
@@ -357,6 +380,21 @@ class StereoCalibration(object):
         # imsize = gray.shape[::-1]
         return allCorners, allIds, all_marker_corners, all_marker_ids, gray.shape[::-1], all_recovered
 
+    def filter_charuco_corners(self, charucoCorners, charucoIds):
+        intersection = reduce(np.intersect1d, charucoIds)
+        filteredCorners = []
+        filteredIds = []
+        for imgCorners, imgIds in zip(charucoCorners, charucoIds):
+            corners = []
+            ids = []
+            for corner, id in zip(imgCorners, imgIds):
+                if id in intersection:
+                    corners.append(corner)
+                    ids.append(id)
+            filteredCorners.append(np.array(corners, dtype=np.float32))
+            filteredIds.append(np.array(ids, dtype=np.int32))
+        return filteredCorners, filteredIds
+
     def calibrate_intrinsics(self, image_files, hfov):
         image_files = glob.glob(image_files + "/*")
         image_files.sort()
@@ -364,7 +402,8 @@ class StereoCalibration(object):
             image_files) != 0, "ERROR: Images not read correctly, check directory"
 
         allCorners, allIds, _, _, imsize, _ = self.analyze_charuco(image_files)
-
+        # print(type(allCorners))
+        # print(type(allIds))
         coverageImage = np.ones(imsize[::-1], np.uint8) * 255
         coverageImage = cv2.cvtColor(coverageImage, cv2.COLOR_GRAY2BGR)
         coverageImage = self.draw_corners(allCorners, coverageImage)
@@ -380,13 +419,14 @@ class StereoCalibration(object):
             return ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, imsize, coverageImage
         else:
             print('Fisheye--------------------------------------------------')
+            charucoCorners, charucoIds = self.filter_charuco_corners(allCorners, allIds)
             ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors = self.calibrate_fisheye(
-                allCorners, allIds, imsize, hfov)
+                charucoCorners, charucoIds, imsize, hfov)
             if self.traceLevel == 4 or self.traceLevel == 5 or self.traceLevel == 10:
                 self.undistort_visualization(
                     image_files, camera_matrix, distortion_coefficients, imsize)
-            print('Fisheye rotation vector', rotation_vectors[0])
-            print('Fisheye translation vector', translation_vectors[0])
+            # print('Fisheye rotation vector', rotation_vectors[0])
+            # print('Fisheye translation vector', translation_vectors[0])
 
             # (Height, width)
             return ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, imsize, coverageImage
@@ -574,9 +614,9 @@ class StereoCalibration(object):
         print(cameraMatrixInit)
         flags = 0
         flags |= cv2.fisheye.CALIB_CHECK_COND 
-        flags |= cv2.fisheye.CALIB_USE_INTRINSIC_GUESS 
+        # flags |= cv2.fisheye.CALIB_USE_INTRINSIC_GUESS 
         flags |= cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC 
-        #flags |= cv2.fisheye.CALIB_FIX_SKEW
+        flags |= cv2.fisheye.CALIB_FIX_SKEW
         distCoeffsInit = np.zeros((4, 1))
         term_criteria = (cv2.TERM_CRITERIA_COUNT +
                          cv2.TERM_CRITERIA_EPS, 50000, 1e-9)
@@ -964,6 +1004,92 @@ class StereoCalibration(object):
         print("Average Epipolar Error in test is : " + str(avg_epipolar))
         return avg_epipolar
 
+    # 1. get Pose of the left Camera for each image.
+    # 2. For each corner in the image get it's corresponding 3D point. 
+    # 3. Transform these points using the Pose and the Relative orientation of the right camera.
+    # 4. Project the 3D points to the right image.
+    # 5. Calculate the error between the projected points and the detected points. 
+    def test_reprojection(self, left_img_pth, right_img_pth, M_l, d_l, M_r, d_r, r, t):
+        images_left = glob.glob(left_img_pth + '/*.png')
+        images_right = glob.glob(right_img_pth + '/*.png')
+        images_left.sort()
+        images_right.sort()
+
+        rvec = np.array([[0.0],
+                 [0.0],
+                 [0.0]], dtype=np.float32)
+
+        tvec = np.array([[0.0],
+                 [0.0],
+                 [0.0]], dtype=np.float32)
+
+        leftCorners, leftIds, _, _, imsize, _ = self.analyze_charuco(images_left)
+        rightCorners, rightIds, _, _, imsize, _ = self.analyze_charuco(images_right)
+        corners3D = self.board.chessboardCorners
+        # print(leftCorners)
+        d = np.array([0.0, 0.0, 0.0, 0.0])
+        print('---------------------------')
+        l_T_r = np.hstack((r, t))
+        l_T_r = np.vstack((l_T_r, [0, 0, 0, 1]))
+        print(l_T_r)
+
+        avg_reprojection_err = 0
+        im_reprojection_err_sq = 0
+        total_markers = 0
+        for i, (im_corners_l, im_corner_ids_l, im_corners_r, im_corner_ids_r) in enumerate(zip(leftCorners, leftIds, rightCorners, rightIds)):
+            
+            im_corners_l = cv2.fisheye.undistortPoints(im_corners_l, M_l, d_l, R=None, P=M_l)
+            ret, rvec_l, tvec_l = cv2.aruco.estimatePoseCharucoBoard(im_corners_l, im_corner_ids_l, self.board, M_l, d, rvec, tvec)
+            print(f'Rvec_l is {rvec_l}')
+            print(f'Tvec_l is {tvec_l}')
+            w_R_l = cv2.Rodrigues(rvec_l)[0]
+            w_T_l = np.hstack((w_R_l, tvec_l))
+            w_T_l = np.vstack((w_T_l, [0, 0, 0, 1]))
+            w_T_r = np.matmul(w_T_l, l_T_r)
+            r_T_w = np.linalg.inv(w_T_r)
+
+            curr_corners = np.array([corners3D[id] for id in im_corner_ids_l])
+            rvec_r, _ = cv2.Rodrigues(w_T_r[:3, :3])
+            tvec_r = w_T_r[:3, 3].reshape(3, 1)
+            rvec_r = rvec_r.copy()
+            tvec_r = tvec_r.copy()
+            # print(f' type of corners3D is {type(corners3D)}')
+            # print(f'Type of curr_corners is {type(curr_corners)}')
+            print(f'rvec is {rvec_r}')
+            print(f'tvec is {tvec_r}')
+            points_2d_r, _ = cv2.fisheye.projectPoints(curr_corners, rvec_r, tvec_r, M_r, d_r)
+
+            img = cv2.imread(images_right[i])
+            # print(img.shape)
+            # exit(1)
+            # convert to color image
+            if len(img.shape) == 2 or img.shape[2] == 1:
+                img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+
+            im_reprojection_err = 0
+            count = 0
+            for r_corner, r_id in zip(im_corners_r, im_corner_ids_r):
+                l_idxs = np.where(im_corner_ids_l == r_id)[0]
+                if len(l_idxs) != 0:
+                    # TODO(Saching13): USe RMSE ?
+                    im_reprojection_err += np.linalg.norm(r_corner - points_2d_r[l_idxs[0]])**2
+                    im_reprojection_err_sq += np.linalg.norm(r_corner - points_2d_r[l_idxs[0]])**2
+
+                    count += 1
+                    total_markers += 1
+                    # draw r_corner in green circles and point_2d_r in red circles
+                    cv2.circle(img, (int(r_corner[0][0]), int(r_corner[0][1])), 2, (0, 255, 0), -1)
+                    cv2.circle(img, (int(points_2d_r[l_idxs[0]][0][0]), int(points_2d_r[l_idxs[0]][0][1])), 2, (0, 0, 255), -1)
+            im_reprojection_err /= count
+            avg_reprojection_err += im_reprojection_err
+            print(f'Image Reprojection error is {im_reprojection_err}')
+            cv2.imshow('img', img)
+            cv2.waitKey(0)
+        avg_reprojection_err /= len(leftCorners)
+        print(f'RMSE Reprojection error is {np.sqrt(avg_reprojection_err)}')
+        print(f'RMSE Reprojection error 2 is {np.sqrt(im_reprojection_err_sq/total_markers)}')
+        raise RuntimeError('This function is not ready yet.')
 
     def test_epipolar_charuco(self, left_img_pth, right_img_pth, M_l, d_l, M_r, d_r, t, r_l, r_r, p_l, p_r):
         images_left = glob.glob(left_img_pth + '/*.png')
@@ -1025,9 +1151,9 @@ class StereoCalibration(object):
         # kScaledR, _ = cv2.getOptimalNewCameraMatrix(M_r, d_r, scaled_res[::-1], 0)
         kScaledR = kScaledL = M_rp
 
-        if self.cameraModel != 'perspective':
-            kScaledR = cv2.fisheye.estimateNewCameraMatrixForUndistortRectify(M_r, d_r, scaled_res[::-1], np.eye(3), fov_scale=1.1)
-            kScaledL = kScaledR
+        # if self.cameraModel != 'perspective':
+        #     # kScaledR = cv2.fisheye.estimateNewCameraMatrixForUndistortRectify(M_r, d_r, scaled_res[::-1], np.eye(3), fov_scale=1.1)
+        #     kScaledL = kScaledR
 
         if rectProjectionMode:
             kScaledL = p_lp
