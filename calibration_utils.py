@@ -610,10 +610,9 @@ class StereoCalibration(object):
                                       [  0.0       ,    0.0       ,    1.0      ]])
 
  
-        print("Camera Matrix initialization.............")
-        print(cameraMatrixInit)
+
         flags = 0
-        flags |= cv2.fisheye.CALIB_CHECK_COND 
+        # flags |= cv2.fisheye.CALIB_CHECK_COND 
         # flags |= cv2.fisheye.CALIB_USE_INTRINSIC_GUESS 
         flags |= cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC 
         flags |= cv2.fisheye.CALIB_FIX_SKEW
