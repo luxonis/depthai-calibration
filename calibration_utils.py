@@ -406,30 +406,22 @@ class StereoCalibration(object):
         # print(type(allIds))
         coverageImage = np.ones(imsize[::-1], np.uint8) * 255
         coverageImage = cv2.cvtColor(coverageImage, cv2.COLOR_GRAY2BGR)
-        coverageImage = self.draw_corners(allCorners, coverageImage)
 
         if self.cameraModel == 'perspective':
             ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors = self.calibrate_camera_charuco(
                 allCorners, allIds, imsize, hfov)
-            # (Height, width)
-            if self.traceLevel == 4 or self.traceLevel == 5 or self.traceLevel == 10:
-                self.undistort_visualization(
-                    image_files, camera_matrix, distortion_coefficients, imsize)
-
-            return ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, imsize, coverageImage
         else:
-            print('Fisheye--------------------------------------------------')
-            charucoCorners, charucoIds = self.filter_charuco_corners(allCorners, allIds)
+            print('------------------------Fisheye--------------------------')
+            allCorners, allIds = self.filter_charuco_corners(allCorners, allIds)
             ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors = self.calibrate_fisheye(
-                charucoCorners, charucoIds, imsize, hfov)
-            if self.traceLevel == 4 or self.traceLevel == 5 or self.traceLevel == 10:
-                self.undistort_visualization(
-                    image_files, camera_matrix, distortion_coefficients, imsize)
-            # print('Fisheye rotation vector', rotation_vectors[0])
-            # print('Fisheye translation vector', translation_vectors[0])
+                allCorners, allIds, imsize, hfov)
 
-            # (Height, width)
-            return ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, imsize, coverageImage
+        if self.traceLevel == 4 or self.traceLevel == 5 or self.traceLevel == 10:
+            self.undistort_visualization(
+                image_files, camera_matrix, distortion_coefficients, imsize)
+
+        coverageImage = self.draw_corners(allCorners, coverageImage)
+        return ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, imsize, coverageImage
 
     def calibrate_extrinsics(self, images_left, images_right, M_l, d_l, M_r, d_r, guess_translation, guess_rotation):
         self.objpoints = []  # 3d point in real world space
