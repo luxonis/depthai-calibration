@@ -1218,6 +1218,7 @@ class StereoCalibration(object):
                 M_rp, d_r, r_r, kScaledR, scaled_res[::-1], cv2.CV_32FC1)
 
         image_data_pairs = []
+        skip_vis = False
         for image_left, image_right in zip(images_left, images_right):
             # read images
             img_l = cv2.imread(image_left, 0)
@@ -1244,14 +1245,14 @@ class StereoCalibration(object):
 
             image_data_pairs.append((img_l, img_r))
             
-            if self.traceLevel == 4 or self.traceLevel == 5 or self.traceLevel == 10:
+            if (self.traceLevel == 4 or self.traceLevel == 5 or self.traceLevel == 10) and not skip_vis:
                 cv2.imshow("undistorted-Left", img_l)
                 cv2.imshow("undistorted-right", img_r)
                 # print(f'image path - {im}')
                 # print(f'Image Undistorted Size {undistorted_img.shape}')
                 k = cv2.waitKey(0)
                 if k == 27:  # Esc key to stop
-                    break
+                    skip_vis = True
         if self.traceLevel == 4 or self.traceLevel == 5 or self.traceLevel == 10:
           cv2.destroyWindow("undistorted-Left")
           cv2.destroyWindow("undistorted-right")  
@@ -1260,6 +1261,8 @@ class StereoCalibration(object):
         imgpoints_l = []
         image_epipolar_color = []
         # new_imagePairs = [])
+        print(f'image_data_pairs count is  --> {len(image_data_pairs)}')
+        # print(f'Right Images count is --> {len(images_right)}')
         for i, image_data_pair in enumerate(image_data_pairs):
             #             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             marker_corners_l, ids_l, rejectedImgPoints = cv2.aruco.detectMarkers(
