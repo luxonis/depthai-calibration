@@ -313,8 +313,10 @@ class StereoCalibration(object):
                     gray = gray[del_height: del_height + req_resolution[0], :]
 
                 count += 1
+            arucoParams = cv2.aruco.DetectorParameters_create()
+            arucoParams.minMarkerDistanceRate = 0.005
             marker_corners, ids, rejectedImgPoints = cv2.aruco.detectMarkers(
-                gray, self.aruco_dictionary)
+                gray, self.aruco_dictionary, parameters=arucoParams)
             marker_corners, ids, refusd, recoverd = cv2.aruco.refineDetectedMarkers(gray, self.board,
                                                                                     marker_corners, ids, rejectedCorners=rejectedImgPoints)
             if self.traceLevel == 2 or self.traceLevel == 4 or self.traceLevel == 10:
@@ -565,9 +567,9 @@ class StereoCalibration(object):
                 obj_pts_sub.append(one_pts[allIds[i][j]])
             obj_points.append(np.array(obj_pts_sub, dtype=np.float32))
 
-        cameraMatrixInit = np.array([[907.84859625,   0.0        , 995.15888273],
-                                      [  0.0       ,  889.29269629, 627.49748034],
-                                      [  0.0       ,    0.0       ,    1.0      ]])
+        cameraMatrixInit = np.array([[510.96288487, 0.          , imsize[0]/2],
+                                     [0.          , 510.18658353, imsize[1]/2],
+                                     [0.          , 0.          , 1.          ]])
 
  
         print("Camera Matrix initialization.............")
@@ -575,13 +577,61 @@ class StereoCalibration(object):
         flags = 0
         flags |= cv2.fisheye.CALIB_CHECK_COND 
         flags |= cv2.fisheye.CALIB_USE_INTRINSIC_GUESS 
-        flags |= cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC 
-        #flags |= cv2.fisheye.CALIB_FIX_SKEW
-        distCoeffsInit = np.zeros((4, 1))
+        flags |= cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC
+        flags |= cv2.fisheye.CALIB_FIX_SKEW
+        distCoeffsInit = np.zeros((4,1))
+        # distCoeffsInit = np.array([
+        # -0.028964687138795853,
+        # 0.012780099175870419,
+        # -0.010693552903831005,
+        # 0.0013224288122728467
+        # ])
         term_criteria = (cv2.TERM_CRITERIA_COUNT +
                          cv2.TERM_CRITERIA_EPS, 50000, 1e-9)
+        try:
+            return cv2.fisheye.calibrate(obj_points, allCorners, imsize, cameraMatrixInit, distCoeffsInit, flags=flags, criteria=term_criteria)
+        except:
+            # calibration failed for full FOV, let's try to limit the corners to smaller part of FOV first to find initial parameters
+            success = False
+            crop = 0.95
+            while not success:
+                print(f"trying crop factor {crop}")
+                obj_points_limited = []
+                corners_limited = []
+                for obj_pts, corners in zip(obj_points, allCorners):
+                    obj_points_tmp = []
+                    corners_tmp = []
+                    for obj_pt, corner in zip(obj_pts, corners):
+                        check_x = corner[0,0] > imsize[0]*(1-crop) and corner[0,0] < imsize[0]*crop
+                        check_y = corner[0,1] > imsize[1]*(1-crop) and corner[0,1] < imsize[1]*crop
+                        if check_x and check_y:
+                            obj_points_tmp.append(obj_pt)
+                            corners_tmp.append(corner)
+                    obj_points_limited.append(np.array(obj_points_tmp))
+                    corners_limited.append(np.array(corners_tmp))
+                    try:
+                        res, K, d, rvecs, tvecs = cv2.fisheye.calibrate(obj_points_limited, corners_limited, imsize, cameraMatrixInit, distCoeffsInit, flags=flags, criteria=term_criteria)
+                        print(f"success with crop factor {crop}")
+                        success = True
+                        break
+                    except:
+                        print(f"failed with crop factor {crop}")
+                        if crop > 0.7:
+                            crop -= 0.05
+                        else:
+                            print(f"tried maximum crop factor and still no success")
+                            break
+            if success:
+                # trying the full FOV once more with better initial parameters
+                print(f"new K init {K}")
+                print(f"new d_init {d}")
+                try:
+                    return cv2.fisheye.calibrate(obj_points, allCorners, imsize, K, d, flags=flags, criteria=term_criteria)
+                except:
+                    print(f"Failed the full res calib, returning calibration with crop factor {crop}")
+                    return res, K, d, rvecs, tvecs
+        return -1
 
-        return cv2.fisheye.calibrate(obj_points, allCorners, imsize, cameraMatrixInit, distCoeffsInit, flags=flags, criteria=term_criteria)
 
     def calibrate_stereo(self, allCorners_l, allIds_l, allCorners_r, allIds_r, imsize, cameraMatrix_l, distCoeff_l, cameraMatrix_r, distCoeff_r, t_in, r_in):
         left_corners_sampled = []
@@ -892,14 +942,18 @@ class StereoCalibration(object):
                     cv2.TERM_CRITERIA_MAX_ITER, 10000, 0.00001)
             
         for i, image_data_pair in enumerate(image_data_pairs):
+
+            arucoParams = cv2.aruco.DetectorParameters_create()
+            arucoParams.minMarkerDistanceRate = 0.005
+
             marker_corners_l, ids_l, rejectedImgPoints = cv2.aruco.detectMarkers(
-                image_data_pair[0], self.aruco_dictionary)
+                image_data_pair[0], self.aruco_dictionary, parameters=arucoParams)
             marker_corners_l, ids_l, _, _ = cv2.aruco.refineDetectedMarkers(image_data_pair[0], self.board,
                                                                             marker_corners_l, ids_l,
                                                                             rejectedCorners=rejectedImgPoints)
 
             marker_corners_r, ids_r, rejectedImgPoints = cv2.aruco.detectMarkers(
-                image_data_pair[1], self.aruco_dictionary)
+                image_data_pair[1], self.aruco_dictionary, parameters=arucoParams)
             marker_corners_r, ids_r, _, _ = cv2.aruco.refineDetectedMarkers(image_data_pair[1], self.board,
                                                                             marker_corners_r, ids_r,
                                                                             rejectedCorners=rejectedImgPoints)
@@ -1145,14 +1199,18 @@ class StereoCalibration(object):
         # new_imagePairs = [])
         for i, image_data_pair in enumerate(image_data_pairs):
             #             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+            arucoParams = cv2.aruco.DetectorParameters_create()
+            arucoParams.minMarkerDistanceRate = 0.005
+
             marker_corners_l, ids_l, rejectedImgPoints = cv2.aruco.detectMarkers(
-                image_data_pair[0], self.aruco_dictionary)
+                image_data_pair[0], self.aruco_dictionary, parameters=arucoParams)
             marker_corners_l, ids_l, _, _ = cv2.aruco.refineDetectedMarkers(image_data_pair[0], self.board,
                                                                             marker_corners_l, ids_l,
                                                                             rejectedCorners=rejectedImgPoints)
 
             marker_corners_r, ids_r, rejectedImgPoints = cv2.aruco.detectMarkers(
-                image_data_pair[1], self.aruco_dictionary)
+                image_data_pair[1], self.aruco_dictionary, parameters=arucoParams)
             marker_corners_r, ids_r, _, _ = cv2.aruco.refineDetectedMarkers(image_data_pair[1], self.board,
                                                                             marker_corners_r, ids_r,
                                                                             rejectedCorners=rejectedImgPoints)
