@@ -288,8 +288,6 @@ class StereoCalibration(object):
         
     def compute_reprojection_errors(self, obj_pts: np.array, img_pts: np.array, K: np.array, dist: np.array, rvec: np.array, tvec: np.array):
         proj_pts, _ = cv2.projectPoints(obj_pts, rvec, tvec, K, dist)
-        print(proj_pts.shape)
-        print(img_pts.shape)
         errs = np.linalg.norm(np.squeeze(proj_pts) - np.squeeze(img_pts), axis = 1)
         return errs 
     
@@ -401,40 +399,6 @@ class StereoCalibration(object):
         if self.cameraModel == 'perspective':
             ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors = self.calibrate_camera_charuco(
                 allCorners, allIds, imsize, hfov)
-            print(f"reprojection error: {ret}")
-            # check if there are any suspicious corners with high reprojection error
-           
-            corners_removed = False
-            for i in range(len(allCorners)):
-                corners = allCorners[i]
-                ids = allIds[i]
-                objpts = self.charuco_ids_to_objpoints(ids)
-                errs = self.compute_reprojection_errors(objpts, corners, camera_matrix, distortion_coefficients, rotation_vectors[i], translation_vectors[i])
-                # print(errs)
-                suspicious_err_thr = 10*np.median(errs)
-                n_offending_pts = np.sum(errs > suspicious_err_thr)
-                offending_pts_idxs = np.where(errs > suspicious_err_thr)[0]
-                # check if there are offending points and if they form a minority
-                if n_offending_pts > 0 and n_offending_pts < len(corners):
-                    print(f"removing {n_offending_pts} offending points with errs {errs[offending_pts_idxs]}")
-                    corners_removed = True
-                    #remove the offending points
-                    offset = 0
-                    print(len(allCorners[i]))
-                    allCorners[i] = np.delete(allCorners[i],offending_pts_idxs, axis = 0)
-                    allIds[i] = np.delete(allIds[i],offending_pts_idxs, axis = 0)
-                    print(len(allCorners[i]))
-                    # for j in range(n_offending_pts):
-                    #     allCorners[i].pop(offending_pts_idxs[j]-offset)
-                    #     allIds[i].pop(offending_pts_idxs[j]-offset)
-                    #     offset += 1
-            if corners_removed:
-                # recompute the calibration if we removed any offending points
-                print("recomputing intrinsics")
-                ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors = self.calibrate_camera_charuco(
-                    allCorners, allIds, imsize, hfov)
-                print(f"reprojection error: {ret}")
-            print(f"reprojection error: {ret}")
             # (Height, width)
             if self.traceLevel == 4 or self.traceLevel == 5 or self.traceLevel == 10:
                 self.undistort_visualization(
@@ -617,6 +581,41 @@ class StereoCalibration(object):
         if self.traceLevel == 3 or self.traceLevel == 10:
             print('Per View Errors...')
             print(perViewErrors)
+        # check if there are any suspicious corners with high reprojection error
+        corners_removed = False
+        for i in range(len(perViewErrors)):
+            if perViewErrors[i] > 3:
+                corners = allCorners[i]
+                ids = allIds[i]
+                objpts = self.charuco_ids_to_objpoints(ids)
+                errs = self.compute_reprojection_errors(objpts, corners, camera_matrix, distortion_coefficients, rotation_vectors[i], translation_vectors[i])
+                # print(errs)
+                suspicious_err_thr = max(10*np.median(errs), 100)
+                n_offending_pts = np.sum(errs > suspicious_err_thr)
+                offending_pts_idxs = np.where(errs > suspicious_err_thr)[0]
+                # check if there are offending points and if they form a minority
+                if n_offending_pts > 0 and n_offending_pts < len(corners):
+                    print(f"removing {n_offending_pts} offending points with errs {errs[offending_pts_idxs]}")
+                    corners_removed = True
+                    #remove the offending points
+                    offset = 0
+                    allCorners[i] = np.delete(allCorners[i],offending_pts_idxs, axis = 0)
+                    allIds[i] = np.delete(allIds[i],offending_pts_idxs, axis = 0)
+        if corners_removed:
+            # recompute the calibration if we removed any offending points
+            print("recomputing intrinsics")
+            (ret, camera_matrix, distortion_coefficients,
+                rotation_vectors, translation_vectors,
+                stdDeviationsIntrinsics, stdDeviationsExtrinsics,
+                perViewErrors) = cv2.aruco.calibrateCameraCharucoExtended(
+                    charucoCorners=allCorners,
+                    charucoIds=allIds,
+                    board=self.board,
+                    imageSize=imsize,
+                    cameraMatrix=cameraMatrixInit,
+                    distCoeffs=distCoeffsInit,
+                    flags=flags,
+                    criteria=(cv2.TERM_CRITERIA_EPS & cv2.TERM_CRITERIA_COUNT, 50000, 1e-9))
         return ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors
 
     def calibrate_fisheye(self, allCorners, allIds, imsize, hfov):
