@@ -278,6 +278,27 @@ class StereoCalibration(object):
         else:
             return None
 
+    def camera_pose_charuco(self, image: np.array, K: np.array, d: np.array):
+        corners = self.detect_charuco_board(image)
+        if corners is not None:
+            ret, p_rvec, p_tvec = cv2.aruco.estimatePoseCharucoBoard(corners[1], corners[2], self.board, K, d, np.empty(1), np.empty(1))
+            return p_rvec, p_tvec
+        else:
+            return None
+        
+    def compute_reprojection_errors(self, obj_pts: np.array, img_pts: np.array, K: np.array, dist: np.array, rvec: np.array, tvec: np.array):
+        proj_pts, _ = cv2.projectPoints(obj_pts, rvec, tvec, K, dist)
+        errs = np.linalg.norm(proj_pts - img_pts, axis = 0)
+        return errs 
+    
+    def charuco_ids_to_objpoints(self, ids):
+        one_pts = self.board.chessboardCorners
+        objpts = []
+        for j in range(len(ids)):   
+            objpts.append(one_pts[ids[j]])
+        return np.array(objpts)
+
+
     def analyze_charuco(self, images, scale_req=False, req_resolution=(800, 1280)):
         """
         Charuco base pose estimation.
@@ -378,6 +399,30 @@ class StereoCalibration(object):
         if self.cameraModel == 'perspective':
             ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors = self.calibrate_camera_charuco(
                 allCorners, allIds, imsize, hfov)
+            # check if there are any suspicious corners with high reprojection error
+            suspicious_err_thr = 30
+            corners_removed = False
+            for i in range(len(allCorners)):
+                corners = allCorners[i]
+                ids = allIds[i]
+                objpts = self.charuco_ids_to_objpoints(ids)
+                errs = self.compute_reprojection_errors(objpts, corners, camera_matrix, distortion_coefficients, rotation_vectors[i], translation_vectors[i])
+                n_offending_pts = np.sum(errs > suspicious_err_thr)
+                offending_pts_idxs = np.where(errs > suspicious_err_thr)[0]
+                # check if there are offending points and if they form a minority
+                if n_offending_pts > 0 and n_offending_pts < len(corners)/10:
+                    corners_removed = True
+                    #remove the offending points
+                    offset = 0
+                    for j in range(n_offending_pts):
+                        allCorners[i].pop(offending_pts_idxs[j]-offset)
+                        allIds[i].pop(offending_pts_idxs[j]-offset)
+                        offset += 1
+            if corners_removed:
+                # recompute the calibration if we removed any offending points
+                ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors = self.calibrate_camera_charuco(
+                    allCorners, allIds, imsize, hfov)
+
             # (Height, width)
             if self.traceLevel == 4 or self.traceLevel == 5 or self.traceLevel == 10:
                 self.undistort_visualization(
