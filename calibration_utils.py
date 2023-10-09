@@ -265,6 +265,39 @@ class StereoCalibration(object):
         # Draw the line on the image
         cv2.line(displayframe, start_point, end_point, color, thickness)
         return displayframe
+    
+    def detect_charuco_board(self, image: np.array):
+        arucoParams = cv2.aruco.DetectorParameters_create()
+        arucoParams.minMarkerDistanceRate = 0.01
+        corners, ids, rejectedImgPoints = cv2.aruco.detectMarkers(image, self.aruco_dictionary, parameters=arucoParams)  # First, detect markers
+        marker_corners, marker_ids, refusd, recoverd = cv2.aruco.refineDetectedMarkers(image, self.board, corners, ids, rejectedCorners=rejectedImgPoints)
+        # If found, add object points, image points (after refining them)
+        if len(marker_corners)>0:
+            ret, corners, ids = cv2.aruco.interpolateCornersCharuco(marker_corners,marker_ids,image, self.board, minMarkers = 1)
+            return ret, corners, ids, marker_corners, marker_ids
+        else:
+            return None
+
+    def camera_pose_charuco(self, image: np.array, K: np.array, d: np.array):
+        corners = self.detect_charuco_board(image)
+        if corners is not None:
+            ret, p_rvec, p_tvec = cv2.aruco.estimatePoseCharucoBoard(corners[1], corners[2], self.board, K, d, np.empty(1), np.empty(1))
+            return p_rvec, p_tvec
+        else:
+            return None
+        
+    def compute_reprojection_errors(self, obj_pts: np.array, img_pts: np.array, K: np.array, dist: np.array, rvec: np.array, tvec: np.array):
+        proj_pts, _ = cv2.projectPoints(obj_pts, rvec, tvec, K, dist)
+        errs = np.linalg.norm(np.squeeze(proj_pts) - np.squeeze(img_pts), axis = 1)
+        return errs 
+    
+    def charuco_ids_to_objpoints(self, ids):
+        one_pts = self.board.chessboardCorners
+        objpts = []
+        for j in range(len(ids)):   
+            objpts.append(one_pts[ids[j]])
+        return np.array(objpts)
+
 
     def analyze_charuco(self, images, scale_req=False, req_resolution=(800, 1280)):
         """
@@ -313,36 +346,30 @@ class StereoCalibration(object):
                     gray = gray[del_height: del_height + req_resolution[0], :]
 
                 count += 1
-            marker_corners, ids, rejectedImgPoints = cv2.aruco.detectMarkers(
-                gray, self.aruco_dictionary)
-            marker_corners, ids, refusd, recoverd = cv2.aruco.refineDetectedMarkers(gray, self.board,
-                                                                                    marker_corners, ids, rejectedCorners=rejectedImgPoints)
+            
+            ret, charuco_corners, charuco_ids, marker_corners, marker_ids  = self.detect_charuco_board(gray)
+
             if self.traceLevel == 2 or self.traceLevel == 4 or self.traceLevel == 10:
                 print('{0} number of Markers corners detected in the image {1}'.format(
-                    len(marker_corners), img_pth.name))
-            if len(marker_corners) > 0:
-                ret, charuco_corners, charuco_ids = cv2.aruco.interpolateCornersCharuco(
-                    marker_corners, ids, gray, self.board, minMarkers = 1)
+                    len(charuco_corners), img_pth.name))
 
-                if charuco_corners is not None and charuco_ids is not None and len(charuco_corners) > 3:
+            if charuco_corners is not None and charuco_ids is not None and len(charuco_corners) > 3:
 
-                    cv2.cornerSubPix(gray, charuco_corners,
-                                     winSize=(5, 5),
-                                     zeroZone=(-1, -1),
-                                     criteria=criteria)
-                    allCorners.append(charuco_corners)  # Charco chess corners
-                    allIds.append(charuco_ids)  # charuco chess corner id's
-                    all_marker_corners.append(marker_corners)
-                    all_marker_ids.append(ids)
-                else:
-                    print(im)
-                    raise RuntimeError("Failed to detect markers in the image")
+                cv2.cornerSubPix(gray, charuco_corners,
+                                    winSize=(5, 5),
+                                    zeroZone=(-1, -1),
+                                    criteria=criteria)
+                allCorners.append(charuco_corners)  # Charco chess corners
+                allIds.append(charuco_ids)  # charuco chess corner id's
+                all_marker_corners.append(marker_corners)
+                all_marker_ids.append(marker_ids)
             else:
-                print(im + " Not found")
+                print(im)
                 raise RuntimeError("Failed to detect markers in the image")
+
             if self.traceLevel == 2 or self.traceLevel == 4 or self.traceLevel == 10:
                 rgb_img = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-                cv2.aruco.drawDetectedMarkers(rgb_img, marker_corners, ids, (0, 0, 255))
+                cv2.aruco.drawDetectedMarkers(rgb_img, marker_corners, marker_ids, (0, 0, 255))
                 cv2.aruco.drawDetectedCornersCharuco(rgb_img, charuco_corners, charuco_ids, (0, 255, 0))
 
                 if rgb_img.shape[1] > 1920:
@@ -554,6 +581,41 @@ class StereoCalibration(object):
         if self.traceLevel == 3 or self.traceLevel == 10:
             print('Per View Errors...')
             print(perViewErrors)
+        # check if there are any suspicious corners with high reprojection error
+        corners_removed = False
+        for i in range(len(perViewErrors)):
+            if perViewErrors[i] > 3:
+                corners = allCorners[i]
+                ids = allIds[i]
+                objpts = self.charuco_ids_to_objpoints(ids)
+                errs = self.compute_reprojection_errors(objpts, corners, camera_matrix, distortion_coefficients, rotation_vectors[i], translation_vectors[i])
+                
+                suspicious_err_thr = max(2*np.median(errs), 100)
+                n_offending_pts = np.sum(errs > suspicious_err_thr)
+                offending_pts_idxs = np.where(errs > suspicious_err_thr)[0]
+                # check if there are offending points and if they form a minority
+                if n_offending_pts > 0 and n_offending_pts < len(corners)/5:
+                    print(f"removing {n_offending_pts} offending points with errs {errs[offending_pts_idxs]}")
+                    corners_removed = True
+                    #remove the offending points
+                    offset = 0
+                    allCorners[i] = np.delete(allCorners[i],offending_pts_idxs, axis = 0)
+                    allIds[i] = np.delete(allIds[i],offending_pts_idxs, axis = 0)
+        if corners_removed:
+            # recompute the calibration if we removed any offending points
+            print("recomputing intrinsics")
+            (ret, camera_matrix, distortion_coefficients,
+                rotation_vectors, translation_vectors,
+                stdDeviationsIntrinsics, stdDeviationsExtrinsics,
+                perViewErrors) = cv2.aruco.calibrateCameraCharucoExtended(
+                    charucoCorners=allCorners,
+                    charucoIds=allIds,
+                    board=self.board,
+                    imageSize=imsize,
+                    cameraMatrix=cameraMatrixInit,
+                    distCoeffs=distCoeffsInit,
+                    flags=flags,
+                    criteria=(cv2.TERM_CRITERIA_EPS & cv2.TERM_CRITERIA_COUNT, 50000, 1e-9))
         return ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors
 
     def calibrate_fisheye(self, allCorners, allIds, imsize, hfov):
@@ -892,26 +954,12 @@ class StereoCalibration(object):
                     cv2.TERM_CRITERIA_MAX_ITER, 10000, 0.00001)
             
         for i, image_data_pair in enumerate(image_data_pairs):
-            marker_corners_l, ids_l, rejectedImgPoints = cv2.aruco.detectMarkers(
-                image_data_pair[0], self.aruco_dictionary)
-            marker_corners_l, ids_l, _, _ = cv2.aruco.refineDetectedMarkers(image_data_pair[0], self.board,
-                                                                            marker_corners_l, ids_l,
-                                                                            rejectedCorners=rejectedImgPoints)
-
-            marker_corners_r, ids_r, rejectedImgPoints = cv2.aruco.detectMarkers(
-                image_data_pair[1], self.aruco_dictionary)
-            marker_corners_r, ids_r, _, _ = cv2.aruco.refineDetectedMarkers(image_data_pair[1], self.board,
-                                                                            marker_corners_r, ids_r,
-                                                                            rejectedCorners=rejectedImgPoints)
-
-            res2_l = cv2.aruco.interpolateCornersCharuco(
-                marker_corners_l, ids_l, image_data_pair[0], self.board, minMarkers = 1)
-            res2_r = cv2.aruco.interpolateCornersCharuco(
-                marker_corners_r, ids_r, image_data_pair[1], self.board, minMarkers = 1)
+            res2_l = self.detect_charuco_board(image_data_pair[0])
+            res2_r = self.detect_charuco_board(image_data_pair[1])
 
             if res2_l[1] is not None and res2_r[2] is not None and len(res2_l[1]) > 3 and len(res2_r[1]) > 3:
 
-                cv2.cornerSubPix(image_data_pair[0], res2_l[1],
+                cv2.cornerSubPix(image_data_pair[0], res2_l[1], 
                                  winSize=(5, 5),
                                  zeroZone=(-1, -1),
                                  criteria=criteria)
@@ -1144,25 +1192,12 @@ class StereoCalibration(object):
         image_epipolar_color = []
         # new_imagePairs = [])
         for i, image_data_pair in enumerate(image_data_pairs):
-            #             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            marker_corners_l, ids_l, rejectedImgPoints = cv2.aruco.detectMarkers(
-                image_data_pair[0], self.aruco_dictionary)
-            marker_corners_l, ids_l, _, _ = cv2.aruco.refineDetectedMarkers(image_data_pair[0], self.board,
-                                                                            marker_corners_l, ids_l,
-                                                                            rejectedCorners=rejectedImgPoints)
-
-            marker_corners_r, ids_r, rejectedImgPoints = cv2.aruco.detectMarkers(
-                image_data_pair[1], self.aruco_dictionary)
-            marker_corners_r, ids_r, _, _ = cv2.aruco.refineDetectedMarkers(image_data_pair[1], self.board,
-                                                                            marker_corners_r, ids_r,
-                                                                            rejectedCorners=rejectedImgPoints)
+            res2_l = self.detect_charuco_board(image_data_pair[0])
+            res2_r = self.detect_charuco_board(image_data_pair[1])
+            
             if self.traceLevel == 2 or self.traceLevel == 4 or self.traceLevel == 10:
-                print(f'Marekrs length for pair {i} is: L {len(marker_corners_l)} | R {len(marker_corners_r)} ')
-            #print(f'Marekrs length l is {len(marker_corners_l)}')
-            res2_l = cv2.aruco.interpolateCornersCharuco(
-                marker_corners_l, ids_l, image_data_pair[0], self.board, minMarkers = 1)
-            res2_r = cv2.aruco.interpolateCornersCharuco(
-                marker_corners_r, ids_r, image_data_pair[1], self.board, minMarkers = 1)
+                print(f'Marekrs length for pair {i} is: L {len(res2_l[1])} | R {len(res2_r[1])} ')
+
             img_concat = cv2.hconcat([image_data_pair[0], image_data_pair[1]])
             img_concat = cv2.cvtColor(img_concat, cv2.COLOR_GRAY2RGB)
             line_row = 0
