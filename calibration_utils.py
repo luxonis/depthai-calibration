@@ -622,11 +622,11 @@ class StereoCalibration(object):
                             print(f"tried maximum crop factor and still no success")
                             break
             if success:
-                # trying the full FOV once more with better initial parameters
+                # trying the full FOV once more with better initial K
                 print(f"new K init {K}")
                 print(f"new d_init {d}")
                 try:
-                    return cv2.fisheye.calibrate(obj_points, allCorners, imsize, K, d, flags=flags, criteria=term_criteria)
+                    return cv2.fisheye.calibrate(obj_points, allCorners, imsize, K, distCoeffsInit, flags=flags, criteria=term_criteria)
                 except:
                     print(f"Failed the full res calib, returning calibration with crop factor {crop}")
                     return res, K, d, rvecs, tvecs
