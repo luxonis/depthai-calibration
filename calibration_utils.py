@@ -889,26 +889,12 @@ class StereoCalibration(object):
                     cv2.TERM_CRITERIA_MAX_ITER, 10000, 0.00001)
             
         for i, image_data_pair in enumerate(image_data_pairs):
-            marker_corners_l, ids_l, rejectedImgPoints = cv2.aruco.detectMarkers(
-                image_data_pair[0], self.aruco_dictionary)
-            marker_corners_l, ids_l, _, _ = cv2.aruco.refineDetectedMarkers(image_data_pair[0], self.board,
-                                                                            marker_corners_l, ids_l,
-                                                                            rejectedCorners=rejectedImgPoints)
-
-            marker_corners_r, ids_r, rejectedImgPoints = cv2.aruco.detectMarkers(
-                image_data_pair[1], self.aruco_dictionary)
-            marker_corners_r, ids_r, _, _ = cv2.aruco.refineDetectedMarkers(image_data_pair[1], self.board,
-                                                                            marker_corners_r, ids_r,
-                                                                            rejectedCorners=rejectedImgPoints)
-
-            res2_l = cv2.aruco.interpolateCornersCharuco(
-                marker_corners_l, ids_l, image_data_pair[0], self.board)
-            res2_r = cv2.aruco.interpolateCornersCharuco(
-                marker_corners_r, ids_r, image_data_pair[1], self.board)
+            res2_l = self.detect_charuco_board(image_data_pair[0])
+            res2_r = self.detect_charuco_board(image_data_pair[1])
 
             if res2_l[1] is not None and res2_r[2] is not None and len(res2_l[1]) > 3 and len(res2_r[1]) > 3:
 
-                cv2.cornerSubPix(image_data_pair[0], res2_l[1],
+                cv2.cornerSubPix(image_data_pair[0], res2_l[1], 
                                  winSize=(5, 5),
                                  zeroZone=(-1, -1),
                                  criteria=criteria)
@@ -1141,25 +1127,12 @@ class StereoCalibration(object):
         image_epipolar_color = []
         # new_imagePairs = [])
         for i, image_data_pair in enumerate(image_data_pairs):
-            #             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            marker_corners_l, ids_l, rejectedImgPoints = cv2.aruco.detectMarkers(
-                image_data_pair[0], self.aruco_dictionary)
-            marker_corners_l, ids_l, _, _ = cv2.aruco.refineDetectedMarkers(image_data_pair[0], self.board,
-                                                                            marker_corners_l, ids_l,
-                                                                            rejectedCorners=rejectedImgPoints)
-
-            marker_corners_r, ids_r, rejectedImgPoints = cv2.aruco.detectMarkers(
-                image_data_pair[1], self.aruco_dictionary)
-            marker_corners_r, ids_r, _, _ = cv2.aruco.refineDetectedMarkers(image_data_pair[1], self.board,
-                                                                            marker_corners_r, ids_r,
-                                                                            rejectedCorners=rejectedImgPoints)
+            res2_l = self.detect_charuco_board(image_data_pair[0])
+            res2_r = self.detect_charuco_board(image_data_pair[1])
+            
             if self.traceLevel == 2 or self.traceLevel == 4 or self.traceLevel == 10:
-                print(f'Marekrs length for pair {i} is: L {len(marker_corners_l)} | R {len(marker_corners_r)} ')
-            #print(f'Marekrs length l is {len(marker_corners_l)}')
-            res2_l = cv2.aruco.interpolateCornersCharuco(
-                marker_corners_l, ids_l, image_data_pair[0], self.board)
-            res2_r = cv2.aruco.interpolateCornersCharuco(
-                marker_corners_r, ids_r, image_data_pair[1], self.board)
+                print(f'Marekrs length for pair {i} is: L {len(res2_l[1])} | R {len(res2_r[1])} ')
+
             img_concat = cv2.hconcat([image_data_pair[0], image_data_pair[1]])
             img_concat = cv2.cvtColor(img_concat, cv2.COLOR_GRAY2RGB)
             line_row = 0
