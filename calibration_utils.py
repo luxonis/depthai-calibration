@@ -257,6 +257,18 @@ class StereoCalibration(object):
         # Draw the line on the image
         cv2.line(displayframe, start_point, end_point, color, thickness)
         return displayframe
+    
+    def detect_charuco_board(self, image: np.array):
+        arucoParams = cv2.aruco.DetectorParameters_create()
+        arucoParams.minMarkerDistanceRate = 0.01
+        corners, ids, rejectedImgPoints = cv2.aruco.detectMarkers(image, self.aruco_dictionary, parameters=arucoParams)  # First, detect markers
+        marker_corners, marker_ids, refusd, recoverd = cv2.aruco.refineDetectedMarkers(image, self.board, corners, ids, rejectedCorners=rejectedImgPoints)
+        # If found, add object points, image points (after refining them)
+        if len(marker_corners)>0:
+            ret, corners, ids = cv2.aruco.interpolateCornersCharuco(marker_corners,marker_ids,image, self.board, minMarkers = 1)
+            return ret, corners, ids, marker_corners, marker_ids
+        else:
+            return None
 
     def analyze_charuco(self, images, scale_req=False, req_resolution=(800, 1280)):
         """
@@ -305,36 +317,30 @@ class StereoCalibration(object):
                     gray = gray[del_height: del_height + req_resolution[0], :]
 
                 count += 1
-            marker_corners, ids, rejectedImgPoints = cv2.aruco.detectMarkers(
-                gray, self.aruco_dictionary)
-            marker_corners, ids, refusd, recoverd = cv2.aruco.refineDetectedMarkers(gray, self.board,
-                                                                                    marker_corners, ids, rejectedCorners=rejectedImgPoints)
+            
+            ret, charuco_corners, charuco_ids, marker_corners, marker_ids  = self.detect_charuco_board(gray)
+
             if self.traceLevel == 2 or self.traceLevel == 4 or self.traceLevel == 10:
                 print('{0} number of Markers corners detected in the image {1}'.format(
-                    len(marker_corners), img_pth.name))
-            if len(marker_corners) > 0:
-                ret, charuco_corners, charuco_ids = cv2.aruco.interpolateCornersCharuco(
-                    marker_corners, ids, gray, self.board)
+                    len(charuco_corners), img_pth.name))
 
-                if charuco_corners is not None and charuco_ids is not None and len(charuco_corners) > 3:
+            if charuco_corners is not None and charuco_ids is not None and len(charuco_corners) > 3:
 
-                    cv2.cornerSubPix(gray, charuco_corners,
-                                     winSize=(5, 5),
-                                     zeroZone=(-1, -1),
-                                     criteria=criteria)
-                    allCorners.append(charuco_corners)  # Charco chess corners
-                    allIds.append(charuco_ids)  # charuco chess corner id's
-                    all_marker_corners.append(marker_corners)
-                    all_marker_ids.append(ids)
-                else:
-                    print(im)
-                    raise RuntimeError("Failed to detect markers in the image")
+                cv2.cornerSubPix(gray, charuco_corners,
+                                    winSize=(5, 5),
+                                    zeroZone=(-1, -1),
+                                    criteria=criteria)
+                allCorners.append(charuco_corners)  # Charco chess corners
+                allIds.append(charuco_ids)  # charuco chess corner id's
+                all_marker_corners.append(marker_corners)
+                all_marker_ids.append(marker_ids)
             else:
-                print(im + " Not found")
+                print(im)
                 raise RuntimeError("Failed to detect markers in the image")
+
             if self.traceLevel == 2 or self.traceLevel == 4 or self.traceLevel == 10:
                 rgb_img = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-                cv2.aruco.drawDetectedMarkers(rgb_img, marker_corners, ids, (0, 0, 255))
+                cv2.aruco.drawDetectedMarkers(rgb_img, marker_corners, marker_ids, (0, 0, 255))
                 cv2.aruco.drawDetectedCornersCharuco(rgb_img, charuco_corners, charuco_ids, (0, 255, 0))
 
                 if rgb_img.shape[1] > 1920:
