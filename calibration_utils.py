@@ -589,12 +589,12 @@ class StereoCalibration(object):
                 ids = allIds[i]
                 objpts = self.charuco_ids_to_objpoints(ids)
                 errs = self.compute_reprojection_errors(objpts, corners, camera_matrix, distortion_coefficients, rotation_vectors[i], translation_vectors[i])
-                # print(errs)
-                suspicious_err_thr = max(10*np.median(errs), 100)
+                
+                suspicious_err_thr = max(2*np.median(errs), 100)
                 n_offending_pts = np.sum(errs > suspicious_err_thr)
                 offending_pts_idxs = np.where(errs > suspicious_err_thr)[0]
                 # check if there are offending points and if they form a minority
-                if n_offending_pts > 0 and n_offending_pts < len(corners):
+                if n_offending_pts > 0 and n_offending_pts < len(corners)/5:
                     print(f"removing {n_offending_pts} offending points with errs {errs[offending_pts_idxs]}")
                     corners_removed = True
                     #remove the offending points
