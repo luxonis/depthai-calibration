@@ -609,18 +609,18 @@ class StereoCalibration(object):
                             corners_tmp.append(corner)
                     obj_points_limited.append(np.array(obj_points_tmp))
                     corners_limited.append(np.array(corners_tmp))
-                    try:
-                        res, K, d, rvecs, tvecs = cv2.fisheye.calibrate(obj_points_limited, corners_limited, imsize, cameraMatrixInit, distCoeffsInit, flags=flags, criteria=term_criteria)
-                        print(f"success with crop factor {crop}")
-                        success = True
+                try:
+                    res, K, d, rvecs, tvecs = cv2.fisheye.calibrate(obj_points_limited, corners_limited, imsize, cameraMatrixInit, distCoeffsInit, flags=flags, criteria=term_criteria)
+                    print(f"success with crop factor {crop}")
+                    success = True
+                    break
+                except:
+                    print(f"failed with crop factor {crop}")
+                    if crop > 0.7:
+                        crop -= 0.05
+                    else:
+                        print(f"tried maximum crop factor and still no success")
                         break
-                    except:
-                        print(f"failed with crop factor {crop}")
-                        if crop > 0.7:
-                            crop -= 0.05
-                        else:
-                            print(f"tried maximum crop factor and still no success")
-                            break
             if success:
                 # trying the full FOV once more with better initial K
                 print(f"new K init {K}")
