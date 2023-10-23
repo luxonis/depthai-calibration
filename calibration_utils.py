@@ -116,7 +116,7 @@ class StereoCalibration(object):
 
         # parameters = aruco.DetectorParameters_create()
         combinedCoverageImage = None
-        resizeWidth, resizeHeight = 0, 0
+        resizeWidth, resizeHeight = 1280, 800
         assert mrk_size != None,  "ERROR: marker size not set"
         for camera in board_config['cameras'].keys():
             cam_info = board_config['cameras'][camera]
@@ -152,7 +152,7 @@ class StereoCalibration(object):
                 if self.traceLevel == 3 or self.traceLevel == 10:
                     print("Estimated intrinsics of {0}: \n {1}".format(
                     cam_info['name'], intrinsics))
-                print("A")
+                
                 coverage_name = cam_info['name']
                 print_text = f'Coverage Image of {coverage_name} with reprojection error of {round(ret,5)}'
                 height, width, _ = coverageImage.shape
@@ -165,7 +165,7 @@ class StereoCalibration(object):
                 if height > resizeHeight:
                     height_offset = (height - resizeHeight)//2
                     coverageImage = coverageImage[height_offset:height_offset+resizeHeight, :]
-                print("B")
+                
                 height, width, _ = coverageImage.shape
                 height_offset = (resizeHeight - height)//2
                 width_offset = (resizeWidth - width)//2
@@ -176,9 +176,9 @@ class StereoCalibration(object):
                 else:
                     combinedCoverageImage = np.hstack((combinedCoverageImage, subImage))
                 coverage_file_path = filepath + '/' + coverage_name + '_coverage.png'
-                print("C")
+                
                 cv2.imwrite(coverage_file_path, subImage)
-                print("D")
+                
 
         combinedCoverageImage = cv2.resize(combinedCoverageImage, (0, 0), fx=self.output_scale_factor, fy=self.output_scale_factor)
         if enable_disp_rectify:
@@ -230,7 +230,8 @@ class StereoCalibration(object):
     
                             print('<-------------Epipolar error of {} and {} ------------>'.format(
                                 left_cam_info['name'], right_cam_info['name']))
-
+                            print(f"dist {left_cam_info['name']}: {left_cam_info['dist_coeff']}")
+                            print(f"dist {right_cam_info['name']}: {right_cam_info['dist_coeff']}")
                             left_cam_info['extrinsics']['epipolar_error'] = self.test_epipolar_charuco(
                                                                                             left_path, 
                                                                                             right_path, 
@@ -590,8 +591,9 @@ class StereoCalibration(object):
         # -0.010693552903831005,
         # 0.0013224288122728467
         # ])
+
         term_criteria = (cv2.TERM_CRITERIA_COUNT +
-                         cv2.TERM_CRITERIA_EPS, 50000, 1e-9)
+                         cv2.TERM_CRITERIA_EPS, 30, 1e-9)
         try:
             res, K, d, rvecs, tvecs =  cv2.fisheye.calibrate(obj_points, allCorners, None, cameraMatrixInit, distCoeffsInit, flags=flags, criteria=term_criteria)
         except:
@@ -766,67 +768,6 @@ class StereoCalibration(object):
                 print(f'Euler angles in XYZ {r_euler} degs')
             isHorizontal = np.absolute(T[0]) > np.absolute(T[1])
             
-            if 0:
-                if not isHorizontal:
-                    rotated_k_l = cameraMatrix_l.copy()
-                    rotated_k_r = cameraMatrix_r.copy()
-                    rotated_k_l[0][0] = cameraMatrix_l[1][1] # swap fx and fy
-                    rotated_k_r[0][0] = cameraMatrix_r[1][1] # swap fx and fy
-                    rotated_k_l[1][1] = cameraMatrix_l[0][0] # swap fx and fy
-                    rotated_k_r[1][1] = cameraMatrix_r[0][0] # swap fx and fy
-
-                    rotated_k_l[0][2] = cameraMatrix_l[1][2] # swap optical center x and y
-                    rotated_k_r[0][2] = cameraMatrix_r[1][2] # swap optical center x and y
-                    rotated_k_l[1][2] = cameraMatrix_l[0][2] # swap optical center x and y
-                    rotated_k_r[1][2] = cameraMatrix_r[0][2] # swap optical center x and y
-                    
-                    T_mod = T.copy()
-                    T_mod[0] = T[1]
-                    T_mod[1] = T[0]
-                    
-                    r = Rotation.from_euler('xyz', [r_euler[1], r_euler[0], r_euler[2]], degrees=True)
-                    R_mod = r.as_matrix()
-                    print(f' Image size is {imsize} and modified iamge size is {imsize[::-1]}')
-                    R_l, R_r, P_l, P_r, Q = cv2.fisheye.stereoRectify(
-                        rotated_k_l,
-                        distCoeff_l,
-                        rotated_k_r,
-                        distCoeff_r,
-                        imsize[::-1], R_mod, T_mod, flags=0)
-                    # TODO revier things back to original style for Rotation and translation
-                    r_euler = Rotation.from_matrix(R_l).as_euler('xyz', degrees=True)
-                    R_l = Rotation.from_euler('xyz', [r_euler[1], r_euler[0], r_euler[2]], degrees=True).as_matrix()
-
-                    r_euler = Rotation.from_matrix(R_r).as_euler('xyz', degrees=True)
-                    R_r = Rotation.from_euler('xyz', [r_euler[1], r_euler[0], r_euler[2]], degrees=True).as_matrix()
-
-                    temp = P_l[0][0]
-                    P_l[0][0] = P_l[1][1]
-                    P_l[1][1] = temp
-                    temp = P_r[0][0]
-                    P_r[0][0] = P_r[1][1]
-                    P_r[1][1] = temp
-                    
-                    temp = P_l[0][2]
-                    P_l[0][2] = P_l[1][2]
-                    P_l[1][2] = temp
-                    temp = P_r[0][2]
-                    P_r[0][2] = P_r[1][2]
-                    P_r[1][2] = temp
-                    
-                    temp = P_l[0][3]
-                    P_l[0][3] = P_l[1][3]
-                    P_l[1][3] = temp
-                    temp = P_r[0][3]
-                    P_r[0][3] = P_r[1][3]
-                    P_r[1][3] = temp
-                else:
-                    R_l, R_r, P_l, P_r, Q = cv2.fisheye.stereoRectify(
-                        cameraMatrix_l,
-                        distCoeff_l,
-                        cameraMatrix_r,
-                        distCoeff_r,
-                        imsize, R, T, flags=0)
             R_l, R_r, P_l, P_r, Q = cv2.fisheye.stereoRectify(
                 cameraMatrix_l,
                 distCoeff_l,
