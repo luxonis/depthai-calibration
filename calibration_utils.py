@@ -279,11 +279,10 @@ class StereoCalibration(object):
         else:
             return None
 
-    def camera_pose_charuco(self, image: np.array, K: np.array, d: np.array):
-        corners = self.detect_charuco_board(image)
-        if corners is not None:
-            ret, p_rvec, p_tvec = cv2.aruco.estimatePoseCharucoBoard(corners[1], corners[2], self.board, K, d, np.empty(1), np.empty(1))
-            return p_rvec, p_tvec
+    def camera_pose_charuco(self, objpoints: np.array, corners: np.array, K: np.array, d: np.array):
+        ret, rvec, tvec = cv2.solvePnP(objpoints, corners, K, d)
+        if ret:
+            return rvec, tvec
         else:
             return None
         
@@ -575,7 +574,21 @@ class StereoCalibration(object):
         cameraMatrixInit = np.array([[f_init, 0.          , imsize[0]/2],
                                      [0.          , f_init, imsize[1]/2],
                                      [0.          , 0.          , 1.          ]])
-
+        distCoeffsInit = np.zeros((4,1))
+         # check if there are any suspicious corners with high reprojection error
+        rvecs = []
+        tvecs = []
+        for corners, ids in zip(allCorners, allIds):
+            objpts = self.charuco_ids_to_objpoints(ids)
+            corners_undist = cv2.fisheye.undistortPoints(corners, cameraMatrixInit, distCoeffsInit)
+            rvec, tvec = self.camera_pose_charuco(objpts, corners_undist, np.eye(3), np.array((0.0,0,0,0)))
+            tvecs.append(tvec)
+            rvecs.append(rvec)
+        corners_removed, filtered_ids, filtered_corners = self.filter_corner_outliers(allIds, allCorners, cameraMatrixInit, distCoeffsInit, rvecs, tvecs)
+        if corners_removed:
+            obj_points = []
+            for i in range(len(filtered_ids)):
+                obj_points.append(self.charuco_ids_to_objpoints(filtered_ids[i]))
  
         print("Camera Matrix initialization.............")
         print(cameraMatrixInit)
@@ -584,7 +597,7 @@ class StereoCalibration(object):
         flags |= cv2.fisheye.CALIB_USE_INTRINSIC_GUESS 
         flags |= cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC
         flags |= cv2.fisheye.CALIB_FIX_SKEW
-        distCoeffsInit = np.zeros((4,1))
+        
         # distCoeffsInit = np.array([
         # -0.028964687138795853,
         # 0.012780099175870419,
@@ -595,7 +608,7 @@ class StereoCalibration(object):
         term_criteria = (cv2.TERM_CRITERIA_COUNT +
                          cv2.TERM_CRITERIA_EPS, 30, 1e-9)
         try:
-            res, K, d, rvecs, tvecs =  cv2.fisheye.calibrate(obj_points, allCorners, None, cameraMatrixInit, distCoeffsInit, flags=flags, criteria=term_criteria)
+            res, K, d, rvecs, tvecs =  cv2.fisheye.calibrate(obj_points, filtered_corners, None, cameraMatrixInit, distCoeffsInit, flags=flags, criteria=term_criteria)
         except:
             # calibration failed for full FOV, let's try to limit the corners to smaller part of FOV first to find initial parameters
             success = False
@@ -604,7 +617,7 @@ class StereoCalibration(object):
                 print(f"trying crop factor {crop}")
                 obj_points_limited = []
                 corners_limited = []
-                for obj_pts, corners in zip(obj_points, allCorners):
+                for obj_pts, corners in zip(obj_points, filtered_corners):
                     obj_points_tmp = []
                     corners_tmp = []
                     for obj_pt, corner in zip(obj_pts, corners):
@@ -631,12 +644,12 @@ class StereoCalibration(object):
                 print(f"new K init {K}")
                 print(f"new d_init {d}")
                 try:
-                    res, K, d, rvecs, tvecs =  cv2.fisheye.calibrate(obj_points, allCorners, imsize, K, distCoeffsInit, flags=flags, criteria=term_criteria) 
+                    res, K, d, rvecs, tvecs =  cv2.fisheye.calibrate(obj_points, filtered_corners, imsize, K, distCoeffsInit, flags=flags, criteria=term_criteria) 
                 except:
                     print(f"Failed the full res calib, using calibration with crop factor {crop}")
         
-        # check if there are any suspicious corners with high reprojection error
-        corners_removed, filtered_ids, filtered_corners = self.filter_corner_outliers(allIds, allCorners, K, d, rvecs, tvecs)
+        # check if there are any suspicious corners with high reprojection error after calib
+        corners_removed, filtered_ids, filtered_corners = self.filter_corner_outliers(allIds, filtered_corners, K, d, rvecs, tvecs)
         if corners_removed:
             # recompute the calibration if we removed any offending points
             obj_points = []
