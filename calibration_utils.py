@@ -558,24 +558,7 @@ class StereoCalibration(object):
         if self.traceLevel == 3 or self.traceLevel == 10:
             print('Per View Errors...')
             print(perViewErrors)
-        # check if there are any suspicious corners with high reprojection error
-        corners_removed, filtered_ids, filtered_corners = self.filter_corner_outliers(allIds, allCorners, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors)
-        
-        if corners_removed:
-            # recompute the calibration if we removed any offending points
-            print("recomputing intrinsics")
-            (ret, camera_matrix, distortion_coefficients,
-                rotation_vectors, translation_vectors,
-                stdDeviationsIntrinsics, stdDeviationsExtrinsics,
-                perViewErrors) = cv2.aruco.calibrateCameraCharucoExtended(
-                    charucoCorners=filtered_corners,
-                    charucoIds=filtered_ids,
-                    board=self.board,
-                    imageSize=imsize,
-                    cameraMatrix=cameraMatrixInit,
-                    distCoeffs=distCoeffsInit,
-                    flags=flags,
-                    criteria=(cv2.TERM_CRITERIA_EPS & cv2.TERM_CRITERIA_COUNT, 50000, 1e-9))
+
         return ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, filtered_ids, filtered_corners
 
     def calibrate_fisheye(self, allCorners, allIds, imsize, hfov):
@@ -663,16 +646,6 @@ class StereoCalibration(object):
                 except:
                     print(f"Failed the full res calib, using calibration with crop factor {crop}")
         
-        # check if there are any suspicious corners with high reprojection error after calib
-        corners_removed, filtered_ids, filtered_corners = self.filter_corner_outliers(allIds, filtered_corners, K, d, rvecs, tvecs)
-        if corners_removed:
-            # recompute the calibration if we removed any offending points
-            obj_points = []
-            for i in range(len(filtered_ids)):
-                obj_points.append(self.charuco_ids_to_objpoints(filtered_ids[i]))
-            print("recomputing intrinsics")
-            res, K, d, rvecs, tvecs =  cv2.fisheye.calibrate(obj_points, filtered_corners, None, K, d, flags=flags, criteria=term_criteria) 
-            print(f"Updated intrinsics: {K}")
         return res, K, d, rvecs, tvecs, filtered_ids, filtered_corners
 
 
