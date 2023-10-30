@@ -524,6 +524,21 @@ class StereoCalibration(object):
             print(cameraMatrixInit)
 
         distCoeffsInit = np.zeros((5, 1))
+        print("looking for misdetected corners")
+         # check if there are any suspicious corners with high reprojection error
+        rvecs = []
+        tvecs = []
+        for corners, ids in zip(allCorners, allIds):
+            objpts = self.charuco_ids_to_objpoints(ids)
+            rvec, tvec = self.camera_pose_charuco(objpts, corners, cameraMatrixInit, distCoeffsInit)
+            tvecs.append(tvec)
+            rvecs.append(rvec)
+        corners_removed, filtered_ids, filtered_corners = self.filter_corner_outliers(allIds, allCorners, cameraMatrixInit, distCoeffsInit, rvecs, tvecs)
+        if corners_removed:
+            obj_points = []
+            for i in range(len(filtered_ids)):
+                obj_points.append(self.charuco_ids_to_objpoints(filtered_ids[i]))
+
         flags = (cv2.CALIB_USE_INTRINSIC_GUESS + 
                  cv2.CALIB_RATIONAL_MODEL)
 
@@ -532,8 +547,8 @@ class StereoCalibration(object):
          rotation_vectors, translation_vectors,
          stdDeviationsIntrinsics, stdDeviationsExtrinsics,
          perViewErrors) = cv2.aruco.calibrateCameraCharucoExtended(
-            charucoCorners=allCorners,
-            charucoIds=allIds,
+            charucoCorners=filtered_corners,
+            charucoIds=filtered_ids,
             board=self.board,
             imageSize=imsize,
             cameraMatrix=cameraMatrixInit,
