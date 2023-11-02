@@ -958,8 +958,8 @@ class StereoCalibration(object):
 
 
     def test_epipolar_charuco(self, left_img_pth, right_img_pth, M_l, d_l, M_r, d_r, t, r_l, r_r, p_l, p_r):
-        images_left = glob.glob(left_img_pth + '/*.png')
-        images_right = glob.glob(right_img_pth + '/*.png')
+        images_left = glob.glob(left_img_pth + '/*')
+        images_right = glob.glob(right_img_pth + '/*')
         images_left.sort()
         images_right.sort()
         assert len(images_left) != 0, "ERROR: Images not read correctly"
