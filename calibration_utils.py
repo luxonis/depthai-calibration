@@ -397,17 +397,34 @@ class StereoCalibration(object):
             # (Height, width)
             return ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, imsize, coverageImage
 
-    def calibrate_extrinsics(self, images_left, images_right, M_l, d_l, M_r, d_r, guess_translation, guess_rotation):
+    def calibrate_extrinsics(self, left_path, right_path, M_l, d_l, M_r, d_r, guess_translation, guess_rotation):
         self.objpoints = []  # 3d point in real world space
         self.imgpoints_l = []  # 2d points in image plane.
         self.imgpoints_r = []  # 2d points in image plane.
-
-        images_left = glob.glob(images_left + "/*")
-        images_right = glob.glob(images_right + "/*")
-
+        images_left = glob.glob(left_path + "/*")
+        images_right = glob.glob(right_path + "/*")
         images_left.sort()
         images_right.sort()
-
+        if len(images_left)!=len(images_right):
+            filenames_left = [os.path.basename(file) for file in images_left]
+            filenames_right = [os.path.basename(file) for file in images_right]
+            set1 = set(filenames_left)
+            set2 = set(filenames_right)
+            original = set2
+            if len(set2)>len(set1):
+                common_elements = set1.intersection(set2)
+                original = set1
+            else:
+                common_elements = set2.intersection(set1)
+                original = set2
+            if common_elements:
+                # If there are common elements, convert the set back to a list
+                result = list(common_elements)
+            else:
+            # If there are no common elements, choose one of the original lists (list1 or list2)
+                result = original
+            images_left = [glob.glob(left_path + f"/{frame_name}")[0] for frame_name in result]
+            images_right = [glob.glob(right_path + f"/{frame_name}")[0] for frame_name in result]
         assert len(
             images_left) != 0, "ERROR: Images not found, check directory"
         assert len(
