@@ -391,12 +391,10 @@ class StereoCalibration(object):
             # (Height, width)
             return ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, imsize, coverageImage
 
-    def calibrate_extrinsics(self, images_left, images_right, M_l, d_l, M_r, d_r, guess_translation, guess_rotation):
+    def calibrate_extrinsics(self, left_path, right_path, M_l, d_l, M_r, d_r, guess_translation, guess_rotation):
         self.objpoints = []  # 3d point in real world space
         self.imgpoints_l = []  # 2d points in image plane.
         self.imgpoints_r = []  # 2d points in image plane.
-        left_path = images_left
-        right_path = images_right
         images_left = glob.glob(left_path + "/*")
         images_right = glob.glob(right_path + "/*")
         images_left.sort()
