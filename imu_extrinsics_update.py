@@ -24,7 +24,7 @@ epilog_text="IMU Extrinsics update"
 parser = argparse.ArgumentParser(
     epilog=epilog_text, description="~~", formatter_class=argparse.RawDescriptionHelpFormatter)
 
-parser.add_argument('-bp', '--boardPath', type=str, required=True,
+parser.add_argument('-bp', '--boardPath', default="", type=str, required=False,
                         help="Board file path")
 
 options = parser.parse_args()
@@ -32,11 +32,15 @@ options = parser.parse_args()
 device = dai.Device()
 calibHandler = device.readCalibration()
 
-path = Path(options.boardPath)
-
+if options.boardPath == "":
+    device_name = device.getDeviceName()
+    path = (Path(__file__).parent.parent / 'resources/depthai_boards/boards' / f"{device_name}.json")
+else:
+    device_name = options.boardPath
+    path = Path(options.boardPath)
+print(f"Opening file {path}.")
 with open(path, 'r') as f:
     board = json.load(f)['board_config']
-
 if 'imuExtrinsics' in board:
     extrinsics = board['imuExtrinsics']['sensors']['BNO']['extrinsics']
     translation = extrinsics['specTranslation']
@@ -47,3 +51,6 @@ if 'imuExtrinsics' in board:
     calibHandler.setImuExtrinsics(stringToCam[extrinsics['to_cam']], rot_mat, translation_vec, translation_vec)
     device.flashCalibration2(calibHandler)
     calibHandler.eepromToJsonFile('./calib.json')
+    print("Succesfuly uploaded IMU data")
+else:
+    print(f"Data for {device_name} in {path} does not exsist.")
