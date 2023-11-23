@@ -838,9 +838,9 @@ class StereoCalibration(object):
                     int(img.shape[1] * scale_width), int(img.shape[0] * scale_width))
                 img = cv2.resize(
                     img, dest_res, interpolation=cv2.INTER_CUBIC)
-                if img.shape[0] < scaled_res[0]:
-                    raise RuntimeError("resizeed height of rgb is smaller than required. {0} < {1}".format(
-                        img.shape[0], scaled_res[0]))
+                #if img.shape[0] < scaled_res[0]:
+                #    raise RuntimeError("resizeed height of rgb is smaller than required. {0} < {1}".format(
+                #        img.shape[0], scaled_res[0]))
                 # print(gray.shape[0] - req_resolution[0])
                 del_height = (img.shape[0] - scaled_res[0]) // 2
                 # gray = gray[: req_resolution[0], :]
@@ -992,8 +992,8 @@ class StereoCalibration(object):
             print("Original res Right :{}".format(frame_right_shape))
         # print("Scale res :{}".format(scaled_res))
 
-        M_lp = self.scale_intrinsics(M_l, frame_left_shape, scaled_res)
-        M_rp = self.scale_intrinsics(M_r, frame_right_shape, scaled_res)
+        M_lp = M_l
+        M_rp = M_r
 
         criteria = (cv2.TERM_CRITERIA_EPS +
                     cv2.TERM_CRITERIA_MAX_ITER, 10000, 0.00001)
@@ -1014,10 +1014,6 @@ class StereoCalibration(object):
         #     kScaledR = cv2.fisheye.estimateNewCameraMatrixForUndistortRectify(M_r, d_r, scaled_res[::-1], np.eye(3), fov_scale=1.1)
         #     kScaledL = kScaledR
 
-            
-        print('Intrinsics from the getOptimalNewCameraMatrix/Original ....')
-        print(f"L: {kScaledL}")
-        print(f"R: {kScaledR}")
         oldEpipolarError = None
         epQueue = deque()
         movePos = True
@@ -1041,8 +1037,6 @@ class StereoCalibration(object):
             img_l = cv2.imread(image_left, 0)
             img_r = cv2.imread(image_right, 0)
 
-            img_l = self.scale_image(img_l, scaled_res)
-            img_r = self.scale_image(img_r, scaled_res)
             # print(img_l.shape)
             # print(img_r.shape)
 
@@ -1078,6 +1072,7 @@ class StereoCalibration(object):
         imgpoints_l = []
         image_epipolar_color = []
         # new_imagePairs = [])
+        show = True
         for i, image_data_pair in enumerate(image_data_pairs):
             res2_l = self.detect_charuco_board(image_data_pair[0])
             res2_r = self.detect_charuco_board(image_data_pair[1])
@@ -1094,11 +1089,6 @@ class StereoCalibration(object):
                          (0, 255, 0), 1)
                 line_row += 30
 
-            cv2.imshow('Stereo Pair', img_concat)
-            k = cv2.waitKey(0)
-            if k == 27:  # Esc key to stop
-                break
-            
             if res2_l[1] is not None and res2_r[2] is not None and len(res2_l[1]) > 3 and len(res2_r[1]) > 3:
 
                 cv2.cornerSubPix(image_data_pair[0], res2_l[1],
@@ -1152,7 +1142,11 @@ class StereoCalibration(object):
             lText = cv2.putText(cv2.cvtColor(image_data_pair[0],cv2.COLOR_GRAY2RGB), img_pth_left.name, org, cv2.FONT_HERSHEY_SIMPLEX, 1, (2, 0, 255), 2, cv2.LINE_AA)
             rText = cv2.putText(cv2.cvtColor(image_data_pair[1],cv2.COLOR_GRAY2RGB), img_pth_right.name + " Error: " + str(localError), org, cv2.FONT_HERSHEY_SIMPLEX, 1, (2, 0, 255), 2, cv2.LINE_AA)
             image_data_pairs[i] = (lText, rText)
-
+            if show: 
+                cv2.imshow('Stereo Pair', img_concat)
+            k = cv2.waitKey(0)
+            if k == 27:  # Esc key to stop
+                show = False
 
         epi_error_sum = 0
         total_corners = 0
