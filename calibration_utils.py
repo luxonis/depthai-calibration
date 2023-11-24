@@ -497,27 +497,12 @@ class StereoCalibration(object):
         Calibrates the camera using the dected corners.
         """
         f = imsize[0] / (2 * np.tan(np.deg2rad(hfov/2)))
-        # TODO(sachin): Change the initialization to be initialized using the guess from fov
+
         print("INTRINSIC CALIBRATION")
         cameraMatrixInit = np.array([[f,    0.0,      imsize[0]/2],
                                      [0.0,     f,      imsize[1]/2],
                                      [0.0,   0.0,        1.0]])
-
-        # cameraMatrixInit = np.array([[857.1668,    0.0,      643.9126],
-        #                                  [0.0,     856.0823,  387.56018],
-        #                                  [0.0,        0.0,        1.0]])
-        """ if imsize[1] < 700:
-            cameraMatrixInit = np.array([[400.0,    0.0,      imsize[0]/2],
-                                         [0.0,     400.0,  imsize[1]/2],
-                                         [0.0,        0.0,        1.0]])
-        elif imsize[1] < 1100:
-            cameraMatrixInit = np.array([[857.1668,    0.0,      643.9126],
-                                         [0.0,     856.0823,  387.56018],
-                                         [0.0,        0.0,        1.0]])
-        else:
-            cameraMatrixInit = np.array([[3819.8801,    0.0,     1912.8375],
-                                         [0.0,     3819.8801, 1135.3433],
-                                         [0.0,        0.0,        1.]]) """
+       
         if self.traceLevel == 3 or self.traceLevel == 10:
             print(
                 f'Camera Matrix initialization with HFOV of {hfov} is.............')
@@ -596,12 +581,6 @@ class StereoCalibration(object):
         flags |= cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC
         flags |= cv2.fisheye.CALIB_FIX_SKEW
         
-        # distCoeffsInit = np.array([
-        # -0.028964687138795853,
-        # 0.012780099175870419,
-        # -0.010693552903831005,
-        # 0.0013224288122728467
-        # ])
 
         term_criteria = (cv2.TERM_CRITERIA_COUNT +
                          cv2.TERM_CRITERIA_EPS, 30, 1e-9)
@@ -1094,10 +1073,10 @@ class StereoCalibration(object):
                          (0, 255, 0), 1)
                 line_row += 30
 
-            cv2.imshow('Stereo Pair', img_concat)
-            k = cv2.waitKey(0)
-            if k == 27:  # Esc key to stop
-                break
+            # cv2.imshow('Stereo Pair', img_concat)
+            # k = cv2.waitKey(0)
+            # if k == 27:  # Esc key to stop
+            #     break
             
             if res2_l[1] is not None and res2_r[2] is not None and len(res2_l[1]) > 3 and len(res2_r[1]) > 3:
 
