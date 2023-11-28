@@ -182,7 +182,7 @@ class StereoCalibration(object):
 
         combinedCoverageImage = cv2.resize(combinedCoverageImage, (0, 0), fx=self.output_scale_factor, fy=self.output_scale_factor)
         if enable_disp_rectify:
-            # cv2.imshow('coverage image', combinedCoverageImage)
+            #cv2.imshow('coverage image', combinedCoverageImage)
             cv2.waitKey(0)
             cv2.destroyAllWindows()
         
@@ -232,16 +232,16 @@ class StereoCalibration(object):
                                 left_cam_info['name'], right_cam_info['name']))
                             print(f"dist {left_cam_info['name']}: {left_cam_info['dist_coeff']}")
                             print(f"dist {right_cam_info['name']}: {right_cam_info['dist_coeff']}")
-                            left_cam_info['extrinsics']['epipolar_error'] = extrinsics[0] #self.test_epipolar_charuco(
-                                                                            #                left_path, 
-                                                                            #                right_path, 
-                                                                            #                left_cam_info['intrinsics'], 
-                                                                            #                left_cam_info['dist_coeff'], 
-                                                                            #                right_cam_info['intrinsics'], 
-                                                                            #                right_cam_info['dist_coeff'], 
-                                                                            #                extrinsics[2], # Translation between left and right Cameras
-                                                                            #                extrinsics[3], # Left Rectification rotation 
-                                                                            #                extrinsics[4]) # Right Rectification rotation 
+                            left_cam_info['extrinsics']['epipolar_error'] = self.test_epipolar_charuco(
+                                                                                            left_path, 
+                                                                                            right_path, 
+                                                                                            left_cam_info['intrinsics'], 
+                                                                                            left_cam_info['dist_coeff'], 
+                                                                                            right_cam_info['intrinsics'], 
+                                                                                            right_cam_info['dist_coeff'], 
+                                                                                            extrinsics[2], # Translation between left and right Cameras
+                                                                                            extrinsics[3], # Left Rectification rotation 
+                                                                                            extrinsics[4]) # Right Rectification rotation 
                                                                                             
     
                             left_cam_info['extrinsics']['rotation_matrix'] = extrinsics[1]
@@ -279,10 +279,11 @@ class StereoCalibration(object):
         else:
             return None
 
-    def camera_pose_charuco(self, objpoints: np.array, corners: np.array, K: np.array, d: np.array):
-        ret, rvec, tvec = cv2.solvePnP(objpoints, corners, K, d)
-        if ret:
-            return rvec, tvec
+    def camera_pose_charuco(self, image: np.array, K: np.array, d: np.array):
+        corners = self.detect_charuco_board(image)
+        if corners is not None:
+            ret, p_rvec, p_tvec = cv2.aruco.estimatePoseCharucoBoard(corners[1], corners[2], self.board, K, d, np.empty(1), np.empty(1))
+            return p_rvec, p_tvec
         else:
             return None
         
@@ -379,7 +380,7 @@ class StereoCalibration(object):
                     rgb_img = cv2.resize(rgb_img, (0, 0), fx=0.7, fy=0.7)
                 if not skip_vis:
                     name = img_pth.name + ' - ' + "marker frame"
-                    cv2.imshow(name, rgb_img)
+                    #cv2.imshow(name, rgb_img)
                     k = cv2.waitKey(0)
                     if k == 27: # Esc key to skip vis
                         skip_vis = True
@@ -497,33 +498,33 @@ class StereoCalibration(object):
         Calibrates the camera using the dected corners.
         """
         f = imsize[0] / (2 * np.tan(np.deg2rad(hfov/2)))
-
+        # TODO(sachin): Change the initialization to be initialized using the guess from fov
         print("INTRINSIC CALIBRATION")
         cameraMatrixInit = np.array([[f,    0.0,      imsize[0]/2],
                                      [0.0,     f,      imsize[1]/2],
                                      [0.0,   0.0,        1.0]])
-       
+
+        # cameraMatrixInit = np.array([[857.1668,    0.0,      643.9126],
+        #                                  [0.0,     856.0823,  387.56018],
+        #                                  [0.0,        0.0,        1.0]])
+        """ if imsize[1] < 700:
+            cameraMatrixInit = np.array([[400.0,    0.0,      imsize[0]/2],
+                                         [0.0,     400.0,  imsize[1]/2],
+                                         [0.0,        0.0,        1.0]])
+        elif imsize[1] < 1100:
+            cameraMatrixInit = np.array([[857.1668,    0.0,      643.9126],
+                                         [0.0,     856.0823,  387.56018],
+                                         [0.0,        0.0,        1.0]])
+        else:
+            cameraMatrixInit = np.array([[3819.8801,    0.0,     1912.8375],
+                                         [0.0,     3819.8801, 1135.3433],
+                                         [0.0,        0.0,        1.]]) """
         if self.traceLevel == 3 or self.traceLevel == 10:
             print(
                 f'Camera Matrix initialization with HFOV of {hfov} is.............')
             print(cameraMatrixInit)
 
         distCoeffsInit = np.zeros((5, 1))
-        print("looking for misdetected corners")
-         # check if there are any suspicious corners with high reprojection error
-        rvecs = []
-        tvecs = []
-        for corners, ids in zip(allCorners, allIds):
-            objpts = self.charuco_ids_to_objpoints(ids)
-            rvec, tvec = self.camera_pose_charuco(objpts, corners, cameraMatrixInit, distCoeffsInit)
-            tvecs.append(tvec)
-            rvecs.append(rvec)
-        corners_removed, filtered_ids, filtered_corners = self.filter_corner_outliers(allIds, allCorners, cameraMatrixInit, distCoeffsInit, rvecs, tvecs)
-        if corners_removed:
-            obj_points = []
-            for i in range(len(filtered_ids)):
-                obj_points.append(self.charuco_ids_to_objpoints(filtered_ids[i]))
-
         flags = (cv2.CALIB_USE_INTRINSIC_GUESS + 
                  cv2.CALIB_RATIONAL_MODEL)
 
@@ -532,8 +533,8 @@ class StereoCalibration(object):
          rotation_vectors, translation_vectors,
          stdDeviationsIntrinsics, stdDeviationsExtrinsics,
          perViewErrors) = cv2.aruco.calibrateCameraCharucoExtended(
-            charucoCorners=filtered_corners,
-            charucoIds=filtered_ids,
+            charucoCorners=allCorners,
+            charucoIds=allIds,
             board=self.board,
             imageSize=imsize,
             cameraMatrix=cameraMatrixInit,
@@ -543,7 +544,24 @@ class StereoCalibration(object):
         if self.traceLevel == 3 or self.traceLevel == 10:
             print('Per View Errors...')
             print(perViewErrors)
-
+        # check if there are any suspicious corners with high reprojection error
+        corners_removed, filtered_ids, filtered_corners = self.filter_corner_outliers(allIds, allCorners, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors)
+        
+        if corners_removed:
+            # recompute the calibration if we removed any offending points
+            print("recomputing intrinsics")
+            (ret, camera_matrix, distortion_coefficients,
+                rotation_vectors, translation_vectors,
+                stdDeviationsIntrinsics, stdDeviationsExtrinsics,
+                perViewErrors) = cv2.aruco.calibrateCameraCharucoExtended(
+                    charucoCorners=filtered_corners,
+                    charucoIds=filtered_ids,
+                    board=self.board,
+                    imageSize=imsize,
+                    cameraMatrix=cameraMatrixInit,
+                    distCoeffs=distCoeffsInit,
+                    flags=flags,
+                    criteria=(cv2.TERM_CRITERIA_EPS & cv2.TERM_CRITERIA_COUNT, 50000, 1e-9))
         return ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, filtered_ids, filtered_corners
 
     def calibrate_fisheye(self, allCorners, allIds, imsize, hfov):
@@ -557,21 +575,7 @@ class StereoCalibration(object):
         cameraMatrixInit = np.array([[f_init, 0.          , imsize[0]/2],
                                      [0.          , f_init, imsize[1]/2],
                                      [0.          , 0.          , 1.          ]])
-        distCoeffsInit = np.zeros((4,1))
-         # check if there are any suspicious corners with high reprojection error
-        rvecs = []
-        tvecs = []
-        for corners, ids in zip(allCorners, allIds):
-            objpts = self.charuco_ids_to_objpoints(ids)
-            corners_undist = cv2.fisheye.undistortPoints(corners, cameraMatrixInit, distCoeffsInit)
-            rvec, tvec = self.camera_pose_charuco(objpts, corners_undist, np.eye(3), np.array((0.0,0,0,0)))
-            tvecs.append(tvec)
-            rvecs.append(rvec)
-        corners_removed, filtered_ids, filtered_corners = self.filter_corner_outliers(allIds, allCorners, cameraMatrixInit, distCoeffsInit, rvecs, tvecs)
-        if corners_removed:
-            obj_points = []
-            for i in range(len(filtered_ids)):
-                obj_points.append(self.charuco_ids_to_objpoints(filtered_ids[i]))
+
  
         print("Camera Matrix initialization.............")
         print(cameraMatrixInit)
@@ -580,12 +584,18 @@ class StereoCalibration(object):
         flags |= cv2.fisheye.CALIB_USE_INTRINSIC_GUESS 
         flags |= cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC
         flags |= cv2.fisheye.CALIB_FIX_SKEW
-        
+        distCoeffsInit = np.zeros((4,1))
+        # distCoeffsInit = np.array([
+        # -0.028964687138795853,
+        # 0.012780099175870419,
+        # -0.010693552903831005,
+        # 0.0013224288122728467
+        # ])
 
         term_criteria = (cv2.TERM_CRITERIA_COUNT +
                          cv2.TERM_CRITERIA_EPS, 30, 1e-9)
         try:
-            res, K, d, rvecs, tvecs =  cv2.fisheye.calibrate(obj_points, filtered_corners, None, cameraMatrixInit, distCoeffsInit, flags=flags, criteria=term_criteria)
+            res, K, d, rvecs, tvecs =  cv2.fisheye.calibrate(obj_points, allCorners, None, cameraMatrixInit, distCoeffsInit, flags=flags, criteria=term_criteria)
         except:
             # calibration failed for full FOV, let's try to limit the corners to smaller part of FOV first to find initial parameters
             success = False
@@ -594,7 +604,7 @@ class StereoCalibration(object):
                 print(f"trying crop factor {crop}")
                 obj_points_limited = []
                 corners_limited = []
-                for obj_pts, corners in zip(obj_points, filtered_corners):
+                for obj_pts, corners in zip(obj_points, allCorners):
                     obj_points_tmp = []
                     corners_tmp = []
                     for obj_pt, corner in zip(obj_pts, corners):
@@ -621,10 +631,20 @@ class StereoCalibration(object):
                 print(f"new K init {K}")
                 print(f"new d_init {d}")
                 try:
-                    res, K, d, rvecs, tvecs =  cv2.fisheye.calibrate(obj_points, filtered_corners, imsize, K, distCoeffsInit, flags=flags, criteria=term_criteria) 
+                    res, K, d, rvecs, tvecs =  cv2.fisheye.calibrate(obj_points, allCorners, imsize, K, distCoeffsInit, flags=flags, criteria=term_criteria) 
                 except:
                     print(f"Failed the full res calib, using calibration with crop factor {crop}")
         
+        # check if there are any suspicious corners with high reprojection error
+        corners_removed, filtered_ids, filtered_corners = self.filter_corner_outliers(allIds, allCorners, K, d, rvecs, tvecs)
+        if corners_removed:
+            # recompute the calibration if we removed any offending points
+            obj_points = []
+            for i in range(len(filtered_ids)):
+                obj_points.append(self.charuco_ids_to_objpoints(filtered_ids[i]))
+            print("recomputing intrinsics")
+            res, K, d, rvecs, tvecs =  cv2.fisheye.calibrate(obj_points, filtered_corners, None, K, d, flags=flags, criteria=term_criteria) 
+            print(f"Updated intrinsics: {K}")
         return res, K, d, rvecs, tvecs, filtered_ids, filtered_corners
 
 
@@ -787,7 +807,7 @@ class StereoCalibration(object):
                 img_concat, (0, 0), fx=0.8, fy=0.8)
 
             # show image
-            # cv2.imshow('Stereo Pair', img_concat)
+            #cv2.imshow('Stereo Pair', img_concat)
             k = cv2.waitKey(0)
             if k == 27:  # Esc key to stop
                 break
@@ -894,7 +914,7 @@ class StereoCalibration(object):
                 img_pth_right = Path(images_right[i])
                 img_pth_left = Path(images_left[i])
                 org = (100, 50)
-                # cv2.imshow('ltext', lText)
+                # #cv2.imshow('ltext', lText)
                 # cv2.waitKey(0)
                 localError = 0
                 corners_l = []
@@ -1073,10 +1093,10 @@ class StereoCalibration(object):
                          (0, 255, 0), 1)
                 line_row += 30
 
-            # cv2.imshow('Stereo Pair', img_concat)
-            # k = cv2.waitKey(0)
-            # if k == 27:  # Esc key to stop
-            #     break
+            #cv2.imshow('Stereo Pair', img_concat)
+            k = cv2.waitKey(0)
+            if k == 27:  # Esc key to stop
+                break
             
             if res2_l[1] is not None and res2_r[2] is not None and len(res2_l[1]) > 3 and len(res2_r[1]) > 3:
 
@@ -1093,7 +1113,7 @@ class StereoCalibration(object):
                 img_pth_right = Path(images_right[i])
                 img_pth_left = Path(images_left[i])
                 org = (100, 50)
-                # cv2.imshow('ltext', lText)
+                # #cv2.imshow('ltext', lText)
                 # cv2.waitKey(0)
                 localError = 0
                 corners_l = []
