@@ -140,7 +140,7 @@ class StereoCalibration(object):
                     '<------------Calibrating {} ------------>'.format(cam_info['name']))
                 images_path = filepath + '/' + cam_info['name']
                 ret, intrinsics, dist_coeff, _, _, filtered_ids, filtered_corners, size, coverageImage = self.calibrate_intrinsics(
-                    images_path, cam_info['hfov'])
+                    images_path, cam_info['hfov'], cam_info["name"])
                 cam_info['intrinsics'] = intrinsics
                 cam_info['dist_coeff'] = dist_coeff
                 cam_info['size'] = size # (Width, height)
@@ -387,7 +387,7 @@ class StereoCalibration(object):
         # imsize = gray.shape[::-1]
         return allCorners, allIds, all_marker_corners, all_marker_ids, gray.shape[::-1], all_recovered
 
-    def calibrate_intrinsics(self, image_files, hfov):
+    def calibrate_intrinsics(self, image_files, hfov, name):
         image_files = glob.glob(image_files + "/*")
         image_files.sort()
         assert len(
@@ -403,18 +403,16 @@ class StereoCalibration(object):
             ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, filtered_ids, filtered_corners  = self.calibrate_camera_charuco(
                 allCorners, allIds, imsize, hfov)
             # (Height, width)
-            if self.traceLevel == 4 or self.traceLevel == 5 or self.traceLevel == 10:
-                self.undistort_visualization(
-                    image_files, camera_matrix, distortion_coefficients, imsize)
+            self.undistort_visualization(
+                image_files, camera_matrix, distortion_coefficients, imsize, name)
 
             return ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, filtered_ids, filtered_corners, imsize, coverageImage
         else:
             print('Fisheye--------------------------------------------------')
             ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, filtered_ids, filtered_corners = self.calibrate_fisheye(
                 allCorners, allIds, imsize, hfov)
-            if self.traceLevel == 4 or self.traceLevel == 5 or self.traceLevel == 10:
-                self.undistort_visualization(
-                    image_files, camera_matrix, distortion_coefficients, imsize)
+            self.undistort_visualization(
+                    image_files, camera_matrix, distortion_coefficients, imsize, name)
             print('Fisheye rotation vector', rotation_vectors[0])
             print('Fisheye translation vector', translation_vectors[0])
 
@@ -442,8 +440,8 @@ class StereoCalibration(object):
 
         return scaled_intrinsics
 
-    def undistort_visualization(self, img_list, K, D, img_size):
-        for im in img_list:
+    def undistort_visualization(self, img_list, K, D, img_size, name):
+        for index, im in enumerate(img_list):
             # print(im)
             img = cv2.imread(im)
             # h, w = img.shape[:2]
@@ -459,14 +457,24 @@ class StereoCalibration(object):
 
             undistorted_img = cv2.remap(
                 img, map1, map2, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
-            cv2.imshow("undistorted", undistorted_img)
-            if self.traceLevel == 3 or self.traceLevel == 10:
+            if index == 0:
+                undistorted_file_path = self.data_path + '/' + name + f'_undistorted.png'
+                cv2.imwrite(undistorted_file_path, undistorted_img)
+            if self.traceLevel == 4 or self.traceLevel == 5 or self.traceLevel == 10:
+                cv2.putText(undistorted_img, "Press S to save image", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 2*undistorted_img.shape[0]/1750, (0, 0, 255), 2)
+                cv2.imshow("undistorted", undistorted_img)
+                k = cv2.waitKey(0)
+                if k == ord("s") or k == ord("S"):
+                    undistorted_img = cv2.remap(
+                        img, map1, map2, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
+                    undistorted_file_path = self.data_path + '/' + name + f'_{index}_undistorted.png'
+                    cv2.imwrite(undistorted_file_path, undistorted_img)
+                if k == 27:  # Esc key to stop
+                    break
                 print(f'image path - {im}')
                 print(f'Image Undistorted Size {undistorted_img.shape}')
-            k = cv2.waitKey(0)
-            if k == 27:  # Esc key to stop
-                break
-        cv2.destroyWindow("undistorted")
+                cv2.destroyWindow("undistorted")
+
 
     def filter_corner_outliers(self, allIds, allCorners, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors):
         corners_removed = False
