@@ -13,6 +13,7 @@ from pathlib import Path
 from functools import reduce
 from collections import deque
 from typing import Optional
+import re
 # Creates a set of 13 polygon coordinates
 rectProjectionMode = 0
 
@@ -918,6 +919,9 @@ class StereoCalibration(object):
             res2_l = self.detect_charuco_board(image_data_pair[0])
             res2_r = self.detect_charuco_board(image_data_pair[1])
 
+            marker_corners_l = 0 if res2_l is None else res2_l[3]
+            marker_corners_r = 0 if res2_r is None else res2_r[3]
+
             if res2_l[1] is not None and res2_r[2] is not None and len(res2_l[1]) > 3 and len(res2_r[1]) > 3:
 
                 cv2.cornerSubPix(image_data_pair[0], res2_l[1], 
@@ -1155,6 +1159,9 @@ class StereoCalibration(object):
         for i, image_data_pair in enumerate(image_data_pairs):
             res2_l = self.detect_charuco_board(image_data_pair[0])
             res2_r = self.detect_charuco_board(image_data_pair[1])
+
+            marker_corners_l = 0 if res2_l is None else res2_l[3]
+            marker_corners_r = 0 if res2_r is None else res2_r[3]
             
             if self.traceLevel == 2 or self.traceLevel == 4 or self.traceLevel == 10:
                 print(f'Marekrs length for pair {i} is: L {len(res2_l[1])} | R {len(res2_r[1])} ')
