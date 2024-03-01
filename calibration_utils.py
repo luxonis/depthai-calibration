@@ -534,7 +534,7 @@ class StereoCalibration(object):
                 obj_points.append(self.charuco_ids_to_objpoints(filtered_ids[i]))
 
         flags = (cv2.CALIB_USE_INTRINSIC_GUESS + 
-                 cv2.CALIB_RATIONAL_MODEL)
+                 cv2.CALIB_RATIONAL_MODEL + cv2.CALIB_TILTED_MODEL)
 
     #     flags = (cv2.CALIB_RATIONAL_MODEL)
         (ret, camera_matrix, distortion_coefficients,
@@ -682,6 +682,7 @@ class StereoCalibration(object):
             flags |= cv2.CALIB_FIX_INTRINSIC
             # flags |= cv2.CALIB_USE_INTRINSIC_GUESS
             flags |= cv2.CALIB_RATIONAL_MODEL
+            flags |= cv2.CALIB_TILTED_MODEL
             # print(flags)
             if self.traceLevel == 3 or self.traceLevel == 10:
                 print('Printing Extrinsics guesses...')
