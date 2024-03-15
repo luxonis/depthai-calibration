@@ -89,7 +89,8 @@ def polygon_from_image_name(image_name):
 class StereoCalibration(object):
     """Class to Calculate Calibration and Rectify a Stereo Camera."""
 
-    def __init__(self, traceLevel: float = 1.0, outputScaleFactor: float = 0.5, disableCamera: list = []):
+    def __init__(self, traceLevel: float = 1.0, outputScaleFactor: float = 0.5, disableCamera: list = [], model = None):
+        self.model = model
         self.traceLevel = traceLevel
         self.output_scale_factor = outputScaleFactor
         self.disableCamera = disableCamera
@@ -397,34 +398,17 @@ class StereoCalibration(object):
             # (Height, width)
             return ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, imsize, coverageImage
 
-    def calibrate_extrinsics(self, left_path, right_path, M_l, d_l, M_r, d_r, guess_translation, guess_rotation):
+    def calibrate_extrinsics(self, images_left, images_right, M_l, d_l, M_r, d_r, guess_translation, guess_rotation):
         self.objpoints = []  # 3d point in real world space
         self.imgpoints_l = []  # 2d points in image plane.
         self.imgpoints_r = []  # 2d points in image plane.
-        images_left = glob.glob(left_path + "/*")
-        images_right = glob.glob(right_path + "/*")
+
+        images_left = glob.glob(images_left + "/*")
+        images_right = glob.glob(images_right + "/*")
+
         images_left.sort()
         images_right.sort()
-        if len(images_left)!=len(images_right):
-            filenames_left = [os.path.basename(file) for file in images_left]
-            filenames_right = [os.path.basename(file) for file in images_right]
-            set1 = set(filenames_left)
-            set2 = set(filenames_right)
-            original = set2
-            if len(set2)>len(set1):
-                common_elements = set1.intersection(set2)
-                original = set1
-            else:
-                common_elements = set2.intersection(set1)
-                original = set2
-            if common_elements:
-                # If there are common elements, convert the set back to a list
-                result = list(common_elements)
-            else:
-            # If there are no common elements, choose one of the original lists (list1 or list2)
-                result = original
-            images_left = [glob.glob(left_path + f"/{frame_name}")[0] for frame_name in result]
-            images_right = [glob.glob(right_path + f"/{frame_name}")[0] for frame_name in result]
+
         assert len(
             images_left) != 0, "ERROR: Images not found, check directory"
         assert len(
@@ -558,8 +542,22 @@ class StereoCalibration(object):
             print(cameraMatrixInit)
 
         distCoeffsInit = np.zeros((5, 1))
-        flags = (cv2.CALIB_USE_INTRINSIC_GUESS + 
+        if self.model == None:
+            flags = (cv2.CALIB_USE_INTRINSIC_GUESS + 
                  cv2.CALIB_RATIONAL_MODEL)
+        elif isinstance(self.model, str):
+            if self.model == "NORMAL":
+                flags = (cv2.CALIB_USE_INTRINSIC_GUESS + 
+                    cv2.CALIB_RATIONAL_MODEL)
+            if self.model == "TILTED":
+                flags = (cv2.CALIB_USE_INTRINSIC_GUESS + 
+                    cv2.CALIB_RATIONAL_MODEL + cv2.CALIB_TILTED_MODEL)
+        
+            elif self.model == "PRISM":
+                flags = (cv2.CALIB_USE_INTRINSIC_GUESS + 
+                    cv2.CALIB_RATIONAL_MODEL + cv2.CALIB_TILTED_MODEL)
+        elif "cv2" in str(type(self.model)):
+            flags = self.model
 
     #     flags = (cv2.CALIB_RATIONAL_MODEL)
         (ret, camera_matrix, distortion_coefficients,
@@ -648,9 +646,22 @@ class StereoCalibration(object):
             # flags |= cv2.CALIB_USE_EXTRINSIC_GUESS
             # print(flags)
 
-            flags |= cv2.CALIB_FIX_INTRINSIC
-            # flags |= cv2.CALIB_USE_INTRINSIC_GUESS
-            flags |= cv2.CALIB_RATIONAL_MODEL
+        if self.model == None:
+            flags = (cv2.CALIB_FIX_INTRINSIC + 
+                 cv2.CALIB_RATIONAL_MODEL)
+        elif isinstance(self.model, str):
+            if self.model == "NORMAL":
+                flags = (cv2.CALIB_FIX_INTRINSIC + 
+                    cv2.CALIB_RATIONAL_MODEL)
+            if self.model == "TILTED":
+                flags = (cv2.CALIB_FIX_INTRINSIC + 
+                    cv2.CALIB_RATIONAL_MODEL + cv2.CALIB_TILTED_MODEL)
+        
+            elif self.model == "PRISM":
+                flags = (cv2.CALIB_FIX_INTRINSIC + 
+                    cv2.CALIB_RATIONAL_MODEL + cv2.CALIB_TILTED_MODEL)
+        elif "cv2" in str(type(self.model)):
+            flags = self.model
             # print(flags)
             if self.traceLevel == 3 or self.traceLevel == 10:
                 print('Printing Extrinsics guesses...')
