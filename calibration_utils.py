@@ -89,7 +89,8 @@ def polygon_from_image_name(image_name):
 class StereoCalibration(object):
     """Class to Calculate Calibration and Rectify a Stereo Camera."""
 
-    def __init__(self, traceLevel: float = 1.0, outputScaleFactor: float = 0.5, disableCamera: list = []):
+    def __init__(self, traceLevel: float = 1.0, outputScaleFactor: float = 0.5, disableCamera: list = [], model = None):
+        self.model = model
         self.traceLevel = traceLevel
         self.output_scale_factor = outputScaleFactor
         self.disableCamera = disableCamera
@@ -533,8 +534,22 @@ class StereoCalibration(object):
             for i in range(len(filtered_ids)):
                 obj_points.append(self.charuco_ids_to_objpoints(filtered_ids[i]))
 
-        flags = (cv2.CALIB_USE_INTRINSIC_GUESS + 
-                 cv2.CALIB_RATIONAL_MODEL + cv2.CALIB_TILTED_MODEL)
+        if self.model == None:
+            flags = (cv2.CALIB_USE_INTRINSIC_GUESS + 
+                 cv2.CALIB_RATIONAL_MODEL)
+        elif isinstance(self.model, str):
+            if self.model == "NORMAL":
+                flags = (cv2.CALIB_USE_INTRINSIC_GUESS + 
+                    cv2.CALIB_RATIONAL_MODEL)
+            if self.model == "TILTED":
+                flags = (cv2.CALIB_USE_INTRINSIC_GUESS + 
+                    cv2.CALIB_RATIONAL_MODEL + cv2.CALIB_TILTED_MODEL)
+
+            elif self.model == "PRISM":
+                flags = (cv2.CALIB_USE_INTRINSIC_GUESS + 
+                    cv2.CALIB_RATIONAL_MODEL + cv2.CALIB_TILTED_MODEL)
+        elif "cv2" in str(type(self.model)):
+            flags = self.model
 
     #     flags = (cv2.CALIB_RATIONAL_MODEL)
         (ret, camera_matrix, distortion_coefficients,
@@ -679,10 +694,22 @@ class StereoCalibration(object):
             # flags |= cv2.CALIB_USE_EXTRINSIC_GUESS
             # print(flags)
 
-            flags |= cv2.CALIB_FIX_INTRINSIC
-            # flags |= cv2.CALIB_USE_INTRINSIC_GUESS
-            flags |= cv2.CALIB_RATIONAL_MODEL
-            flags |= cv2.CALIB_TILTED_MODEL
+            if self.model == None:
+                flags = (cv2.CALIB_FIX_INTRINSIC + 
+                    cv2.CALIB_RATIONAL_MODEL)
+            elif isinstance(self.model, str):
+                if self.model == "NORMAL":
+                    flags = (cv2.CALIB_FIX_INTRINSIC + 
+                        cv2.CALIB_RATIONAL_MODEL)
+                if self.model == "TILTED":
+                    flags = (cv2.CALIB_FIX_INTRINSIC + 
+                        cv2.CALIB_RATIONAL_MODEL + cv2.CALIB_TILTED_MODEL)
+
+                elif self.model == "PRISM":
+                    flags = (cv2.CALIB_FIX_INTRINSIC + 
+                        cv2.CALIB_RATIONAL_MODEL + cv2.CALIB_TILTED_MODEL)
+            elif "cv2" in str(type(self.model)):
+                flags = self.model
             # print(flags)
             if self.traceLevel == 3 or self.traceLevel == 10:
                 print('Printing Extrinsics guesses...')
