@@ -541,7 +541,7 @@ class StereoCalibration(object):
             if self.model == "NORMAL":
                 flags = (cv2.CALIB_USE_INTRINSIC_GUESS + 
                     cv2.CALIB_RATIONAL_MODEL)
-            if self.model == "TILTED":
+            elif self.model == "TILTED":
                 flags = (cv2.CALIB_USE_INTRINSIC_GUESS + 
                     cv2.CALIB_RATIONAL_MODEL + cv2.CALIB_TILTED_MODEL)
 
