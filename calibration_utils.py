@@ -553,6 +553,12 @@ class StereoCalibration(object):
                 flags += cv2.CALIB_RATIONAL_MODEL
                 flags += cv2.CALIB_TILTED_MODEL
                 flags += cv2.CALIB_THIN_PRISM_MODEL
+            elif self.model == "THERMAL":
+                print("Using THERMAL model")
+                flags += cv2.CALIB_RATIONAL_MODEL
+                flags += cv2.CALIB_FIX_K3
+                flags += cv2.CALIB_FIX_K5
+                flags += cv2.CALIB_FIX_K6
 
         elif isinstance(self.model, int):
             print("Using CUSTOM flags")
@@ -714,6 +720,12 @@ class StereoCalibration(object):
                     flags += cv2.CALIB_RATIONAL_MODEL 
                     flags += cv2.CALIB_TILTED_MODEL
                     flags += cv2.CALIB_THIN_PRISM_MODEL
+                elif self.model == "THERMAL":
+                    print("Using THERMAL model")
+                    flags += cv2.CALIB_RATIONAL_MODEL
+                    flags += cv2.CALIB_FIX_K3
+                    flags += cv2.CALIB_FIX_K5
+                    flags += cv2.CALIB_FIX_K6
 
             elif isinstance(self.model, int):
                 flags = self.model
