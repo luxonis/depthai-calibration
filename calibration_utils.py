@@ -86,6 +86,7 @@ def polygon_from_image_name(image_name):
     return int(re.findall("p(\d+)", image_name)[0])
 
 
+
 class StereoCalibration(object):
     """Class to Calculate Calibration and Rectify a Stereo Camera."""
 
@@ -97,7 +98,7 @@ class StereoCalibration(object):
 
         """Class to Calculate Calibration and Rectify a Stereo Camera."""
 
-    def calibrate(self, board_config, filepath, square_size, mrk_size, squaresX, squaresY, camera_model, enable_disp_rectify):
+    def calibrate(self, board_config, filepath, square_size, mrk_size, squaresX, squaresY, camera_model, enable_disp_rectify, charucos = {}):
         """Function to calculate calibration for stereo camera."""
         start_time = time.time()
         # init object data
@@ -106,6 +107,7 @@ class StereoCalibration(object):
         self.enable_rectification_disp = enable_disp_rectify
         self.cameraModel = camera_model
         self.data_path = filepath
+        self.charucos = charucos 
         self.aruco_dictionary = aruco.Dictionary_get(aruco.DICT_4X4_1000)
 
         self.board = aruco.CharucoBoard_create(
@@ -127,12 +129,12 @@ class StereoCalibration(object):
                 image_files.sort()
                 for im in image_files:
                     frame = cv2.imread(im)
-                    height, width, _ = frame.shape
-                    widthRatio = resizeWidth / width
-                    heightRatio = resizeHeight / height
+                    self.height, self.width, _ = frame.shape
+                    widthRatio = resizeWidth / self.width
+                    heightRatio = resizeHeight / self.height
                     if (widthRatio > 0.8 and heightRatio > 0.8 and widthRatio <= 1.0 and heightRatio <= 1.0) or (widthRatio > 1.2 and heightRatio > 1.2) or (resizeHeight == 0):
-                        resizeWidth = width
-                        resizeHeight = height
+                        resizeWidth = self.width
+                        resizeHeight = self.height
                     break
         for camera in board_config['cameras'].keys():
             cam_info = board_config['cameras'][camera]
@@ -267,7 +269,108 @@ class StereoCalibration(object):
         # Draw the line on the image
         cv2.line(displayframe, start_point, end_point, color, thickness)
         return displayframe
-    
+    def calculate_reprojection(self, img,rvecs, tvecs, cameraMatrix, distCoeffs, reprojection, filtered_corners,filtered_id, camera, display = True):
+        whole_error = []
+        all_points = []
+        all_corners = []
+        all_error = []
+        for i, (corners, ids, img) in enumerate(zip(filtered_corners, filtered_id, img)):
+            total_error_squared = 0
+            total_points = 0
+            gray = img
+            if ids is not None and len(corners) > 0:
+                # Convert detected corner IDs to integer for indexing
+                ids = ids.flatten()
+
+                # Prepare object points (3D points) - these are based on the known geometry of the ChArUco board
+                objPoints = np.array([self.board.chessboardCorners[id] for id in ids], dtype=np.float32)
+
+                # Project the 3D object points to 2D image points
+                imgpoints2, _ = cv2.projectPoints(objPoints, rvecs[i], tvecs[i], cameraMatrix, distCoeffs)
+                for points in imgpoints2:
+                    all_points.append(points)
+                for corner in corners:
+                    all_corners.append(corner)
+                # Flatten the corners to match the projected points' shape
+                corners2 = np.array(corners, dtype=np.float32).reshape(-1, 2)
+
+                # Calculate the squared error between observed and projected points for this image
+                for corner, point in zip(corners2, imgpoints2.reshape(-1,2)):
+                    each_error = cv2.norm(corner,point, cv2.NORM_L2)
+                    all_error.append(each_error)
+                    
+                error = cv2.norm(corners2, imgpoints2.reshape(-1, 2), cv2.NORM_L2)
+                total_error_squared += error**2
+                total_points += len(objPoints)
+
+            # Compute the overall RMS re-projection error
+            rms_error = np.sqrt(total_error_squared / total_points)
+            whole_error.append(rms_error)
+            #print(f"Overall RMS re-projection error: {rms_error}")
+            total_error_squared = 0
+            total_points = 0
+            if display == True:
+                import matplotlib.pyplot as plt
+                #plt.scatter(np.array(imgpoints2).T[0][0], np.array(imgpoints2).T[1][0])
+                #plt.scatter(np.array(corners).T[0][0], np.array(corners).T[1][0], alpha = 0.5)
+                #x_dir = np.array(corners).T[0][0] - np.array(imgpoints2).T[0][0]
+                #y_dir = np.array(corners).T[1][0] - np.array(imgpoints2).T[1][0]
+#
+                #from matplotlib.image import imread
+                ##plt.imshow(gray, alpha = 0.5,cmap='gray')
+                #plt.plot([],[], label = f"Rerprojection Remade: {rms_error}")
+                #plt.plot([],[], label = f"Whole Rerprojection OpenCV: {reprojection}")
+                ##plt.quiver(np.array(corners).T[0][0], np.array(corners).T[1][0], x_dir, y_dir, angles='xy', scale_units='xy', scale=0.05,color="black")
+                #plt.xlabel('Width')
+                #plt.legend()
+                #plt.ylabel('Y coordinate')
+                #plt.grid()
+                #plt.show()
+
+        import matplotlib.pyplot as plt
+        plt.scatter(np.array(all_points).T[0][0], np.array(all_points).T[1][0])
+        plt.scatter(np.array(all_corners).T[0][0], np.array(all_corners).T[1][0], alpha = 0.5)
+        x_dir = np.array(all_corners).T[0][0] - np.array(all_points).T[0][0]
+        y_dir = np.array(all_corners).T[1][0] - np.array(all_points).T[1][0]
+        from matplotlib.image import imread
+        #plt.imshow(gray, alpha = 0.5,cmap='gray')
+        plt.plot([],[], label = f"Rerprojection Remade ALL: {np.sqrt(np.mean(np.array(whole_error)**2))}")
+        plt.plot([],[], label = f"Whole Rerprojection OpenCV: {reprojection}")
+        #plt.quiver(np.array(corners).T[0][0], np.array(corners).T[1][0], x_dir, y_dir, angles='xy', scale_units='xy', scale=0.05,color="black")
+        plt.xlabel('Width')
+        plt.legend()
+        plt.ylabel('Y coordinate')
+        plt.grid()
+
+        plt.show()
+        from scipy.interpolate import griddata
+        x = np.array(all_points).T[0][0]
+        y = np.array(all_points).T[1][0]
+        z = np.array(all_error)
+
+        x_flat = x.flatten()
+        y_flat = y.flatten()
+        z_flat = z.flatten()
+
+        # Create a grid
+        plt.title(f"Reprojection error of {camera}")
+        grid_x, grid_y = np.mgrid[min(x_flat):max(x_flat):100j, min(y_flat):max(y_flat):100j]
+        grid_z = griddata((x_flat, y_flat), z_flat, (grid_x, grid_y), method='cubic')
+        print((min(x_flat), max(x_flat), min(y_flat), max(y_flat)))
+        plt.imshow(grid_z.T, extent=(min(x_flat), max(x_flat), min(y_flat), max(y_flat)), origin='lower', aspect='auto')
+        plt.colorbar()  # to show the color scale
+        plt.title('Z as a function of X and Y')
+        plt.xlabel('X')
+        plt.ylabel('Y')
+        plt.show()
+        plt.title(f"Reprojection error of {camera}")
+        plt.contourf(grid_x, grid_y, grid_z, 50, cmap='RdYlGn')
+        plt.colorbar(label='Reprojection error')
+        contours = plt.contour(grid_x, grid_y, grid_z, 7, colors ="black", alpha = 0.7, linewidths = 0.5, linestyles = "dashed")
+        plt.clabel(contours, inline=True, fontsize=8)
+        # Interpolate onto the grid
+        plt.show()
+
     def detect_charuco_board(self, image: np.array):
         arucoParams = cv2.aruco.DetectorParameters_create()
         arucoParams.minMarkerDistanceRate = 0.01
@@ -393,8 +496,16 @@ class StereoCalibration(object):
         image_files.sort()
         assert len(
             image_files) != 0, "ERROR: Images not read correctly, check directory"
-
-        allCorners, allIds, _, _, imsize, _ = self.analyze_charuco(image_files)
+        if self.charucos == {}:
+            allCorners, allIds, _, _, imsize, _ = self.analyze_charuco(image_files)
+        else:
+            allCorners = []
+            allIds = []
+            for charuco_img in self.charucos[name]:
+                ids, charucos = charuco_img
+                allCorners.append(charucos)
+                allIds.append(ids)
+            imsize = (self.height, self.width)
 
         coverageImage = np.ones(imsize[::-1], np.uint8) * 255
         coverageImage = cv2.cvtColor(coverageImage, cv2.COLOR_GRAY2BGR)
@@ -404,6 +515,8 @@ class StereoCalibration(object):
             ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, filtered_ids, filtered_corners  = self.calibrate_camera_charuco(
                 allCorners, allIds, imsize, hfov)
             # (Height, width)
+            #self.calculate_reprojection(image_files, rotation_vectors, translation_vectors, camera_matrix, distortion_coefficients, ret, allCorners, allIds, camera = name)
+            #self.calculate_reprojection(image_files, rotation_vectors, translation_vectors, camera_matrix, distortion_coefficients, ret, filtered_corners, filtered_ids, camera = name)
             self.undistort_visualization(
                 image_files, camera_matrix, distortion_coefficients, imsize, name)
 
