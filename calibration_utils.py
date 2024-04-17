@@ -13,6 +13,52 @@ from pathlib import Path
 from functools import reduce
 from collections import deque
 from typing import Optional
+import matplotlib.pyplot as plt
+from scipy.interpolate import griddata
+
+import matplotlib.colors as colors
+cdict = {'red':  ((0.0, 0.0, 0.0),   # no red at 0
+          (0.5, 1.0, 1.0),   # all channels set to 1.0 at 0.5 to create white
+          (1.0, 0.8, 0.8)),  # set to 0.8 so its not too bright at 1
+'green': ((0.0, 0.8, 0.8),   # set to 0.8 so its not too bright at 0
+          (0.5, 1.0, 1.0),   # all channels set to 1.0 at 0.5 to create white
+          (1.0, 0.0, 0.0)),  # no green at 1
+'blue':  ((0.0, 0.0, 0.0),   # no blue at 0
+          (0.5, 1.0, 1.0),   # all channels set to 1.0 at 0.5 to create white
+          (1.0, 0.0, 0.0))   # no blue at 1
+}
+# Create the colormap using the dictionary
+GnRd = colors.LinearSegmentedColormap('GnRd', cdict)
+def get_quadrant_coordinates(width, height, nx, ny):
+    quadrant_width = width // nx
+    quadrant_height = height // ny
+    quadrant_coords = []
+    
+    for i in range(int(nx)):
+        for j in range(int(ny)):
+            left = i * quadrant_width
+            upper = j * quadrant_height
+            right = left + quadrant_width
+            bottom = upper + quadrant_height
+            quadrant_coords.append((left, upper, right, bottom))
+    
+    return quadrant_coords
+
+def sort_points_into_quadrants(points, width, height, error, nx = 4, ny = 4):
+    quadrant_coords = get_quadrant_coordinates(width, height, nx, ny)
+    quadrants = {i: [] for i in range(int(nx*ny))}  # Create a dictionary to store points by quadrant index
+
+    for x, y in points:
+        # Find the correct quadrant for each point
+        for index, (left, upper, right, bottom) in enumerate(quadrant_coords):
+            if left <= x < right and upper <= y < bottom:
+                quadrants[index].append(error[index])
+                break
+            
+    return quadrants, quadrant_coords
+
+def distance(point1, point2):
+    return np.sqrt((point1[0] - point2[0])**2 + (point1[1] - point2[1])**2)
 # Creates a set of 13 polygon coordinates
 rectProjectionMode = 0
 
@@ -90,7 +136,9 @@ def polygon_from_image_name(image_name):
 class StereoCalibration(object):
     """Class to Calculate Calibration and Rectify a Stereo Camera."""
 
-    def __init__(self, traceLevel: float = 1.0, outputScaleFactor: float = 0.5, disableCamera: list = [], model = None):
+    def __init__(self, traceLevel: float = 1.0, outputScaleFactor: float = 0.5, disableCamera: list = [], model = None,ccm_model = {}, filtering_enable = False):
+        self.filtering_enable = filtering_enable
+        self.ccm_model = ccm_model
         self.model = model
         self.traceLevel = traceLevel
         self.output_scale_factor = outputScaleFactor
@@ -109,7 +157,8 @@ class StereoCalibration(object):
         self.data_path = filepath
         self.charucos = charucos 
         self.aruco_dictionary = aruco.Dictionary_get(aruco.DICT_4X4_1000)
-
+        self.squaresX = squaresX
+        self.squaresY = squaresY
         self.board = aruco.CharucoBoard_create(
             # 22, 16,
             squaresX, squaresY,
@@ -235,6 +284,7 @@ class StereoCalibration(object):
                                 left_cam_info['name'], right_cam_info['name']))
                             print(f"dist {left_cam_info['name']}: {left_cam_info['dist_coeff']}")
                             print(f"dist {right_cam_info['name']}: {right_cam_info['dist_coeff']}")
+                            print(f"Epipolar error {extrinsics[0]}")
                             left_cam_info['extrinsics']['epipolar_error'] = extrinsics[0] #self.test_epipolar_charuco(
                                                                             #                left_path, 
                                                                             #                right_path, 
@@ -269,15 +319,22 @@ class StereoCalibration(object):
         # Draw the line on the image
         cv2.line(displayframe, start_point, end_point, color, thickness)
         return displayframe
-    def calculate_reprojection(self, img,rvecs, tvecs, cameraMatrix, distCoeffs, reprojection, filtered_corners,filtered_id, camera, display = True):
+    def calculate_reprojection(self,rvecs, tvecs, cameraMatrix, distCoeffs, reprojection, filtered_corners,filtered_id, camera, display = True, threshold = 1, draw_quadrants = False, nx = 4, ny = 4):
         whole_error = []
         all_points = []
         all_corners = []
         all_error = []
-        for i, (corners, ids, img) in enumerate(zip(filtered_corners, filtered_id, img)):
+        all_ids = []
+        removed_corners = []
+        removed_points = []
+        removed_ids = []
+        display_corners = []
+        display_points = []
+        circle_size = 0
+
+        for i, (corners, ids) in enumerate(zip(filtered_corners, filtered_id)):
             total_error_squared = 0
             total_points = 0
-            gray = img
             if ids is not None and len(corners) > 0:
                 # Convert detected corner IDs to integer for indexing
                 ids = ids.flatten()
@@ -287,18 +344,43 @@ class StereoCalibration(object):
 
                 # Project the 3D object points to 2D image points
                 imgpoints2, _ = cv2.projectPoints(objPoints, rvecs[i], tvecs[i], cameraMatrix, distCoeffs)
-                for points in imgpoints2:
-                    all_points.append(points)
-                for corner in corners:
-                    all_corners.append(corner)
+
                 # Flatten the corners to match the projected points' shape
                 corners2 = np.array(corners, dtype=np.float32).reshape(-1, 2)
+                imgpoints2 = imgpoints2.reshape(-1,2)
+                def find_index_of_array(pairs, target):
+                    pairs_array = np.array(pairs)
+                    target_array = np.array(target)
+                    # Compare all pairs against the target array along axis 1
+                    matches = np.all(pairs_array == target_array, axis=1)
+                    # Find the index of the first match
+                    match_indices = np.where(matches)[0]
+                    return match_indices[0] if match_indices.size > 0 else -1
 
-                # Calculate the squared error between observed and projected points for this image
-                for corner, point in zip(corners2, imgpoints2.reshape(-1,2)):
+                inede = 0
+                img_error = []
+                for corner, point, id in zip(corners2, imgpoints2, ids):
                     each_error = cv2.norm(corner,point, cv2.NORM_L2)
-                    all_error.append(each_error)
-                    
+                    if each_error > threshold:
+                        removed_corners.append(corner)
+                        removed_points.append(point)
+                        removed_ids.append(id)
+                        index = find_index_of_array(corners2, corner)
+                        #print("Index of target array:", index)
+                        corners2 = np.delete(corners2, index, axis=0)
+                        imgpoints2 = np.delete(imgpoints2, index, axis=0)
+                        ids = np.delete(ids, index, axis=0)
+                        inede += 1
+                    else:
+                        all_error.append(abs(each_error))
+                        display_corners.append(corner)
+                        display_points.append(point)
+                        img_error.append(each_error)
+                corners = corners2.reshape(-1, 1, 2)
+                all_corners.append(corners)
+                all_points.append(imgpoints2)
+                all_ids.append(ids)
+
                 error = cv2.norm(corners2, imgpoints2.reshape(-1, 2), cv2.NORM_L2)
                 total_error_squared += error**2
                 total_points += len(objPoints)
@@ -306,70 +388,132 @@ class StereoCalibration(object):
             # Compute the overall RMS re-projection error
             rms_error = np.sqrt(total_error_squared / total_points)
             whole_error.append(rms_error)
-            #print(f"Overall RMS re-projection error: {rms_error}")
+            if self.traceLevel == 2  or self.traceLevel == 4 or self.traceLevel == 10:
+                print(f"Overall RMS re-projection error for frame {i}: {rms_error}")
             total_error_squared = 0
             total_points = 0
-            if display == True:
-                import matplotlib.pyplot as plt
-                #plt.scatter(np.array(imgpoints2).T[0][0], np.array(imgpoints2).T[1][0])
-                #plt.scatter(np.array(corners).T[0][0], np.array(corners).T[1][0], alpha = 0.5)
-                #x_dir = np.array(corners).T[0][0] - np.array(imgpoints2).T[0][0]
-                #y_dir = np.array(corners).T[1][0] - np.array(imgpoints2).T[1][0]
-#
-                #from matplotlib.image import imread
-                ##plt.imshow(gray, alpha = 0.5,cmap='gray')
-                #plt.plot([],[], label = f"Rerprojection Remade: {rms_error}")
-                #plt.plot([],[], label = f"Whole Rerprojection OpenCV: {reprojection}")
-                ##plt.quiver(np.array(corners).T[0][0], np.array(corners).T[1][0], x_dir, y_dir, angles='xy', scale_units='xy', scale=0.05,color="black")
-                #plt.xlabel('Width')
-                #plt.legend()
-                #plt.ylabel('Y coordinate')
-                #plt.grid()
-                #plt.show()
 
-        import matplotlib.pyplot as plt
-        plt.scatter(np.array(all_points).T[0][0], np.array(all_points).T[1][0])
-        plt.scatter(np.array(all_corners).T[0][0], np.array(all_corners).T[1][0], alpha = 0.5)
-        x_dir = np.array(all_corners).T[0][0] - np.array(all_points).T[0][0]
-        y_dir = np.array(all_corners).T[1][0] - np.array(all_points).T[1][0]
-        from matplotlib.image import imread
-        #plt.imshow(gray, alpha = 0.5,cmap='gray')
-        plt.plot([],[], label = f"Rerprojection Remade ALL: {np.sqrt(np.mean(np.array(whole_error)**2))}")
-        plt.plot([],[], label = f"Whole Rerprojection OpenCV: {reprojection}")
-        #plt.quiver(np.array(corners).T[0][0], np.array(corners).T[1][0], x_dir, y_dir, angles='xy', scale_units='xy', scale=0.05,color="black")
-        plt.xlabel('Width')
-        plt.legend()
-        plt.ylabel('Y coordinate')
-        plt.grid()
+            if self.traceLevel == 5 or self.traceLevel == 10:
+                centroid_x = np.mean(np.array(display_corners).T[0])
+                centroid_y = np.mean(np.array(display_corners).T[1])
 
-        plt.show()
-        from scipy.interpolate import griddata
-        x = np.array(all_points).T[0][0]
-        y = np.array(all_points).T[1][0]
-        z = np.array(all_error)
+                # Calculate distances from the center
+                distances = [distance((centroid_x, centroid_y), point) for point in np.array(corners2)]
+                max_distance = max(distances)
+                if max_distance > circle_size:
+                    circle_size = max_distance
+                circle = plt.Circle((centroid_x, centroid_y), circle_size, color='black', fill=True, label = "Calibrated area", alpha = 0.2)
+                fig, ax = plt.subplots()
+                ax.add_artist(circle)
+                ax.set_title(f"Reprojection error for frame {i}, camera {camera}")
+                ax.scatter(np.array(imgpoints2).T[0], np.array(imgpoints2).T[1], label = "Original", alpha = 0.5, color = "Black")
+                img = ax.scatter(np.array(corners2).T[0], np.array(corners2).T[1], c=img_error, cmap = GnRd, label = "Reprojected", vmin=0, vmax=threshold)
 
-        x_flat = x.flatten()
-        y_flat = y.flatten()
-        z_flat = z.flatten()
+                ax.plot([],[], label = f"Rerprojection Remade: {round(rms_error, 4)}", color = "white")
+                ax.plot([],[], label = f"Whole Rerprojection OpenCV: {round(reprojection, 4)}", color = "white")
+                cbar = plt.colorbar(img, ax=ax)
+                cbar.set_label("Reprojection error")
+                ax.set_xlabel('Width')
+                ax.set_xlim([0,self.width])
+                ax.set_ylim([0,self.height])
+                ax.legend()
+                ax.set_ylabel('Y coordinate')
+                plt.grid()
+                plt.show()
 
-        # Create a grid
-        plt.title(f"Reprojection error of {camera}")
-        grid_x, grid_y = np.mgrid[min(x_flat):max(x_flat):100j, min(y_flat):max(y_flat):100j]
-        grid_z = griddata((x_flat, y_flat), z_flat, (grid_x, grid_y), method='cubic')
-        print((min(x_flat), max(x_flat), min(y_flat), max(y_flat)))
-        plt.imshow(grid_z.T, extent=(min(x_flat), max(x_flat), min(y_flat), max(y_flat)), origin='lower', aspect='auto')
-        plt.colorbar()  # to show the color scale
-        plt.title('Z as a function of X and Y')
-        plt.xlabel('X')
-        plt.ylabel('Y')
-        plt.show()
-        plt.title(f"Reprojection error of {camera}")
-        plt.contourf(grid_x, grid_y, grid_z, 50, cmap='RdYlGn')
-        plt.colorbar(label='Reprojection error')
-        contours = plt.contour(grid_x, grid_y, grid_z, 7, colors ="black", alpha = 0.7, linewidths = 0.5, linestyles = "dashed")
-        plt.clabel(contours, inline=True, fontsize=8)
-        # Interpolate onto the grid
-        plt.show()
+            img_error = []
+
+        if self.traceLevel == 3 or self.traceLevel == 5 or self.traceLevel == 10:
+            center_x, center_y = self.width / 2, self.height / 2
+            distances = [distance((center_x, center_y), point) for point in np.array(display_corners)]
+            max_distance = max(distances)
+            circle = plt.Circle((center_x, center_y), max_distance, color='black', fill=True, label = "Calibrated area", alpha = 0.2)
+            fig, ax = plt.subplots()
+            ax.add_artist(circle)
+            ax.set_title(f"Reprojection map camera {camera}")
+            ax.scatter(np.array(display_points).T[0], np.array(display_points).T[1], label = "Original", alpha = 0.5, color = "Black")
+            img = ax.scatter(np.array(display_corners).T[0], np.array(display_corners).T[1], c=all_error, cmap = GnRd, label = "Reprojected", vmin=0, vmax=threshold)
+
+            ax.plot([],[], label = f"Rerprojection Remade ALL: {round(np.sqrt(np.mean(np.array(whole_error)**2)), 4)}", color = "white")
+            ax.plot([],[], label = f"Whole Rerprojection OpenCV: {round(reprojection, 4)}", color = "white")
+            cbar = plt.colorbar(img, ax=ax)
+            cbar.set_label("Reprojection error")
+            ax.set_xlabel('Width')
+            ax.set_xlim([0,self.width])
+            ax.set_ylim([0,self.height])
+            ax.legend()
+            ax.set_ylabel('Height')
+            plt.grid()
+            plt.show()
+
+        if self.traceLevel == 5 or self.traceLevel == 10:
+            x = np.array(display_points).T[0]
+            y = np.array(display_points).T[1]
+            z = np.array(all_error)
+
+            x_flat = x.flatten()
+            y_flat = y.flatten()
+            z_flat = z.flatten()
+
+            grid_x, grid_y = np.mgrid[min(x_flat):max(x_flat):100j, min(y_flat):max(y_flat):100j]
+            grid_z = abs(griddata((x_flat, y_flat), z_flat, (grid_x, grid_y), method='cubic'))
+
+            plt.title(f"Reprojection error of {camera}")
+            plt.contourf(grid_x, grid_y, grid_z, 50, cmap=GnRd)
+            plt.colorbar(label='Reprojection error')
+            contours = plt.contour(grid_x, grid_y, grid_z, 7, colors ="black", alpha = 0.7, linewidths = 0.5, linestyles = "dashed")
+            plt.clabel(contours, inline=True, fontsize=8)
+            plt.xlim([0,self.width])
+            plt.ylim([0,self.height])
+            plt.show()
+
+        if self.traceLevel == 11:
+            sorted_points, quadrant_coords = sort_points_into_quadrants(display_points, self.width, self.height, error=all_error)
+            quadrant_width = self.width // nx
+            quadrant_height = self.height // ny
+
+            image = np.full((self.height, self.width, 3), 255, dtype=np.uint8)
+
+            # Define the quadrant lines
+            quadrant_width = self.width // nx
+            quadrant_height = self.height // ny
+            index = 0
+            import math
+            for i in range(nx):
+                for j in range(ny):
+                    # Scale the color from red (0, 0, 255) to green (0, 255, 0)
+                    count = np.mean(sorted_points[index])
+                    if math.isnan(count):
+                        count = "Missing"
+                        red = 255
+                        green = 0
+                    if len(sorted_points[index]) < ((self.squaresX*self.squaresY))*0.05:
+                        count = f"Only {len(sorted_points[index])} points"
+                        red = 255
+                        green = 0 
+                    else:
+                        count = round(count, 4)
+                        threshold = 1
+                        red = int(((count / threshold)) * 255)
+                        green = int((1 -count / threshold) * 255)
+                    color = (0, green, red)
+
+                    left = j * quadrant_width
+                    upper = i * quadrant_height
+                    right = left + quadrant_width
+                    bottom = upper + quadrant_height
+                    index += 1
+
+                    cv2.rectangle(image, (left, upper), (right, bottom), color, -1)
+
+                    text_position = (left + 10, upper + quadrant_height // 2)
+                    cv2.putText(image, str(count), text_position, cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA)
+
+            cv2.imshow('Quadrants with Points', image)
+            cv2.waitKey(0)
+            cv2.destroyAllWindows()
+
+        return all_corners, all_ids
 
     def detect_charuco_board(self, image: np.array):
         arucoParams = cv2.aruco.DetectorParameters_create()
@@ -513,10 +657,11 @@ class StereoCalibration(object):
 
         if self.cameraModel == 'perspective':
             ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, filtered_ids, filtered_corners  = self.calibrate_camera_charuco(
-                allCorners, allIds, imsize, hfov)
-            # (Height, width)
-            #self.calculate_reprojection(image_files, rotation_vectors, translation_vectors, camera_matrix, distortion_coefficients, ret, allCorners, allIds, camera = name)
-            #self.calculate_reprojection(image_files, rotation_vectors, translation_vectors, camera_matrix, distortion_coefficients, ret, filtered_corners, filtered_ids, camera = name)
+                allCorners, allIds, imsize, hfov, name)
+            if self.filtering_enable or self.traceLevel != 0:
+                filtered_corners, filtered_ids = self.calculate_reprojection(rotation_vectors, translation_vectors, camera_matrix, distortion_coefficients, ret, filtered_corners, filtered_ids, camera = name)
+                ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, filtered_ids, filtered_corners  = self.calibrate_camera_charuco(
+                    filtered_corners, filtered_ids, imsize, hfov, name)
             self.undistort_visualization(
                 image_files, camera_matrix, distortion_coefficients, imsize, name)
 
@@ -615,7 +760,7 @@ class StereoCalibration(object):
         return corners_removed, allIds, allCorners
 
 
-    def calibrate_camera_charuco(self, allCorners, allIds, imsize, hfov):
+    def calibrate_camera_charuco(self, allCorners, allIds, imsize, hfov, name):
         """
         Calibrates the camera using the dected corners.
         """
@@ -642,11 +787,17 @@ class StereoCalibration(object):
             tvecs.append(tvec)
             rvecs.append(rvec)
         corners_removed, filtered_ids, filtered_corners = self.filter_corner_outliers(allIds, allCorners, cameraMatrixInit, distCoeffsInit, rvecs, tvecs)
+
+        # Here we need to get initialK and parameters for each camera ready and fill them inside reconstructed reprojection error per point
+        #ret = 0.0
+        #filtered_corners, filtered_ids = self.calculate_reprojection(rvecs, tvecs, cameraMatrixInit, distCoeffsInit, ret, allCorners, allIds, camera = name)
         if corners_removed:
             obj_points = []
             for i in range(len(filtered_ids)):
                 obj_points.append(self.charuco_ids_to_objpoints(filtered_ids[i]))
         flags = cv2.CALIB_USE_INTRINSIC_GUESS
+        if self.ccm_model != {}:
+            self.model = self.ccm_model[name]
         if self.model == None:
             print("Use DEFAULT model")
             flags += cv2.CALIB_RATIONAL_MODEL
@@ -820,6 +971,8 @@ class StereoCalibration(object):
             # flags |= cv2.CALIB_USE_EXTRINSIC_GUESS
             # print(flags)
             flags = cv2.CALIB_FIX_INTRINSIC
+            if self.ccm_model != {}:
+                self.model = self.ccm_model
             if self.model == None:
                 flags += cv2.CALIB_RATIONAL_MODEL
             elif isinstance(self.model, str):
