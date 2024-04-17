@@ -136,9 +136,9 @@ def polygon_from_image_name(image_name):
 class StereoCalibration(object):
     """Class to Calculate Calibration and Rectify a Stereo Camera."""
 
-    def __init__(self, traceLevel: float = 1.0, outputScaleFactor: float = 0.5, disableCamera: list = [], model = None,ccm_model = {}, filtering_enable = False):
+    def __init__(self, traceLevel: float = 1.0, outputScaleFactor: float = 0.5, disableCamera: list = [], model = None,distortion_model = {}, filtering_enable = False):
         self.filtering_enable = filtering_enable
-        self.ccm_model = ccm_model
+        self.ccm_model = distortion_model
         self.model = model
         self.traceLevel = traceLevel
         self.output_scale_factor = outputScaleFactor
@@ -152,8 +152,10 @@ class StereoCalibration(object):
         # init object data
         if self.traceLevel == 2 or self.traceLevel == 10:
             print(f'squareX is {squaresX}')
-        self.enable_rectification_disp = enable_disp_rectify
+        self.enable_rectification_disp = True
         self.cameraModel = camera_model
+        self.distortion_model = {}
+        self.calib_model = {}
         self.data_path = filepath
         self.charucos = charucos 
         self.aruco_dictionary = aruco.Dictionary_get(aruco.DICT_4X4_1000)
@@ -191,6 +193,15 @@ class StereoCalibration(object):
                 print(
                     '<------------Calibrating {} ------------>'.format(cam_info['name']))
                 images_path = filepath + '/' + cam_info['name']
+                if "calib_model" in cam_info.keys():
+                    self.cameraModel_ccm, self.model_ccm = cam_info["calib_model"].split("_")
+                    if self.cameraModel_ccm == "fisheye":
+                        self.model_ccm == None
+                    self.calib_model[cam_info["name"]] = self.cameraModel_ccm
+                    self.distortion_model[cam_info["name"]] = self.model_ccm
+                else:
+                    self.calib_model[cam_info["name"]] = self.cameraModel
+                    self.distortion_model[cam_info["name"]] = self.model
                 ret, intrinsics, dist_coeff, _, _, filtered_ids, filtered_corners, size, coverageImage = self.calibrate_intrinsics(
                     images_path, cam_info['hfov'], cam_info["name"])
                 cam_info['intrinsics'] = intrinsics
@@ -261,7 +272,7 @@ class StereoCalibration(object):
                             rotation = Rotation.from_euler(
                                 'xyz', [rot['r'], rot['p'], rot['y']], degrees=True).as_matrix().astype(np.float32)
     
-                            extrinsics = self.calibrate_stereo(left_cam_info['filtered_ids'], left_cam_info['filtered_corners'], right_cam_info['filtered_ids'], right_cam_info['filtered_corners'], left_cam_info['intrinsics'], left_cam_info[
+                            extrinsics = self.calibrate_stereo(left_cam_info['name'], right_cam_info['name'], left_cam_info['filtered_ids'], left_cam_info['filtered_corners'], right_cam_info['filtered_ids'], right_cam_info['filtered_corners'], left_cam_info['intrinsics'], left_cam_info[
                                                                    'dist_coeff'], right_cam_info['intrinsics'], right_cam_info['dist_coeff'], translation, rotation)
                             if extrinsics[0] == -1:
                                 return -1, extrinsics[1]
@@ -285,16 +296,18 @@ class StereoCalibration(object):
                             print(f"dist {left_cam_info['name']}: {left_cam_info['dist_coeff']}")
                             print(f"dist {right_cam_info['name']}: {right_cam_info['dist_coeff']}")
                             print(f"Epipolar error {extrinsics[0]}")
-                            left_cam_info['extrinsics']['epipolar_error'] = extrinsics[0] #self.test_epipolar_charuco(
-                                                                            #                left_path, 
-                                                                            #                right_path, 
-                                                                            #                left_cam_info['intrinsics'], 
-                                                                            #                left_cam_info['dist_coeff'], 
-                                                                            #                right_cam_info['intrinsics'], 
-                                                                            #                right_cam_info['dist_coeff'], 
-                                                                            #                extrinsics[2], # Translation between left and right Cameras
-                                                                            #                extrinsics[3], # Left Rectification rotation 
-                                                                            #                extrinsics[4]) # Right Rectification rotation 
+                            left_cam_info['extrinsics']['epipolar_error'] = extrinsics[0] 
+                            self.test_epipolar_charuco(left_cam_info['name'], 
+                                                        right_cam_info['name'],
+                                                        left_path, 
+                                                        right_path, 
+                                                        left_cam_info['intrinsics'], 
+                                                        left_cam_info['dist_coeff'], 
+                                                        right_cam_info['intrinsics'], 
+                                                        right_cam_info['dist_coeff'], 
+                                                        extrinsics[2], # Translation between left and right Cameras
+                                                        extrinsics[3], # Left Rectification rotation 
+                                                        extrinsics[4]) # Right Rectification rotation 
                                                                                             
     
                             left_cam_info['extrinsics']['rotation_matrix'] = extrinsics[1]
@@ -465,6 +478,7 @@ class StereoCalibration(object):
             plt.clabel(contours, inline=True, fontsize=8)
             plt.xlim([0,self.width])
             plt.ylim([0,self.height])
+            plt.grid()
             plt.show()
 
         if self.traceLevel == 11:
@@ -654,8 +668,7 @@ class StereoCalibration(object):
         coverageImage = np.ones(imsize[::-1], np.uint8) * 255
         coverageImage = cv2.cvtColor(coverageImage, cv2.COLOR_GRAY2BGR)
         coverageImage = self.draw_corners(allCorners, coverageImage)
-
-        if self.cameraModel == 'perspective':
+        if self.calib_model[name] == 'perspective':
             ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, filtered_ids, filtered_corners  = self.calibrate_camera_charuco(
                 allCorners, allIds, imsize, hfov, name)
             if self.filtering_enable or self.traceLevel != 0:
@@ -796,37 +809,35 @@ class StereoCalibration(object):
             for i in range(len(filtered_ids)):
                 obj_points.append(self.charuco_ids_to_objpoints(filtered_ids[i]))
         flags = cv2.CALIB_USE_INTRINSIC_GUESS
-        if self.ccm_model != {}:
-            self.model = self.ccm_model[name]
-        if self.model == None:
+        if self.distortion_model[name] == None:
             print("Use DEFAULT model")
             flags += cv2.CALIB_RATIONAL_MODEL
 
-        elif isinstance(self.model, str):
-            if self.model == "NORMAL":
+        elif isinstance(self.distortion_model[name], str):
+            if self.distortion_model[name] == "NORMAL":
                 print("Using NORMAL model")
                 flags += cv2.CALIB_RATIONAL_MODEL
 
-            elif self.model == "TILTED":
+            elif self.distortion_model[name] == "TILTED":
                 print("Using TILTED model")
                 flags += cv2.CALIB_RATIONAL_MODEL
                 flags += cv2.CALIB_TILTED_MODEL
 
-            elif self.model == "PRISM":
+            elif self.distortion_model[name] == "PRISM":
                 print("Using PRISM model")
                 flags += cv2.CALIB_RATIONAL_MODEL
                 flags += cv2.CALIB_TILTED_MODEL
                 flags += cv2.CALIB_THIN_PRISM_MODEL
-            elif self.model == "THERMAL":
+            elif self.distortion_model[name] == "THERMAL":
                 print("Using THERMAL model")
                 flags += cv2.CALIB_RATIONAL_MODEL
                 flags += cv2.CALIB_FIX_K3
                 flags += cv2.CALIB_FIX_K5
                 flags += cv2.CALIB_FIX_K6
 
-        elif isinstance(self.model, int):
+        elif isinstance(self.distortion_model[name], int):
             print("Using CUSTOM flags")
-            flags = self.model
+            flags = self.distortion_model[name]
 
     #     flags = (cv2.CALIB_RATIONAL_MODEL)
         (ret, camera_matrix, distortion_coefficients,
@@ -929,7 +940,7 @@ class StereoCalibration(object):
         return res, K, d, rvecs, tvecs, filtered_ids, filtered_corners
 
 
-    def calibrate_stereo(self, allIds_l, allCorners_l, allIds_r, allCorners_r, cameraMatrix_l, distCoeff_l, cameraMatrix_r, distCoeff_r, t_in, r_in):
+    def calibrate_stereo(self, left_name, right_name, allIds_l, allCorners_l, allIds_r, allCorners_r, cameraMatrix_l, distCoeff_l, cameraMatrix_r, distCoeff_r, t_in, r_in):
         left_corners_sampled = []
         right_corners_sampled = []
         obj_pts = []
@@ -966,52 +977,68 @@ class StereoCalibration(object):
         stereocalib_criteria = (cv2.TERM_CRITERIA_COUNT +
                                 cv2.TERM_CRITERIA_EPS, 30, 1e-9)
 
+        for i in range(len(left_corners_sampled)):
+            if self.calib_model[left_name] == "perspective":
+                left_corners_sampled[i] = cv2.undistortPoints(np.array(left_corners_sampled[i]), cameraMatrix_l, distCoeff_l)
+            else:
+                left_corners_sampled[i] = cv2.fisheye.undistortPoints(np.array(left_corners_sampled[i]), cameraMatrix_l, distCoeff_l)
+        for i in range(len(right_corners_sampled)):
+            if self.calib_model[right_name] == "perspective":
+                right_corners_sampled[i] = cv2.undistortPoints(np.array(right_corners_sampled[i]), cameraMatrix_r, distCoeff_r)
+            else:
+                right_corners_sampled[i] = cv2.fisheye.undistortPoints(np.array(right_corners_sampled[i]), cameraMatrix_r, distCoeff_r)
         if self.cameraModel == 'perspective':
-            flags = 0
-            # flags |= cv2.CALIB_USE_EXTRINSIC_GUESS
-            # print(flags)
-            flags = cv2.CALIB_FIX_INTRINSIC
-            if self.ccm_model != {}:
-                self.model = self.ccm_model
-            if self.model == None:
-                flags += cv2.CALIB_RATIONAL_MODEL
-            elif isinstance(self.model, str):
-                if self.model == "NORMAL":
+            if False:
+                flags = 0
+                # flags |= cv2.CALIB_USE_EXTRINSIC_GUESS
+                # print(flags)
+                flags = cv2.CALIB_FIX_INTRINSIC
+                if self.ccm_model != {}:
+                    self.model = self.ccm_model
+                if self.model == None:
                     flags += cv2.CALIB_RATIONAL_MODEL
-                if self.model == "TILTED":
-                    flags += cv2.CALIB_RATIONAL_MODEL 
-                    flags += cv2.CALIB_TILTED_MODEL
+                elif isinstance(self.model, str):
+                    if self.model == "NORMAL":
+                        flags += cv2.CALIB_RATIONAL_MODEL
+                    if self.model == "TILTED":
+                        flags += cv2.CALIB_RATIONAL_MODEL 
+                        flags += cv2.CALIB_TILTED_MODEL
 
-                elif self.model == "PRISM":
-                    flags += cv2.CALIB_RATIONAL_MODEL 
-                    flags += cv2.CALIB_TILTED_MODEL
-                    flags += cv2.CALIB_THIN_PRISM_MODEL
-                elif self.model == "THERMAL":
-                    print("Using THERMAL model")
-                    flags += cv2.CALIB_RATIONAL_MODEL
-                    flags += cv2.CALIB_FIX_K3
-                    flags += cv2.CALIB_FIX_K5
-                    flags += cv2.CALIB_FIX_K6
+                    elif self.model == "PRISM":
+                        flags += cv2.CALIB_RATIONAL_MODEL 
+                        flags += cv2.CALIB_TILTED_MODEL
+                        flags += cv2.CALIB_THIN_PRISM_MODEL
+                    elif self.model == "THERMAL":
+                        print("Using THERMAL model")
+                        flags += cv2.CALIB_RATIONAL_MODEL
+                        flags += cv2.CALIB_FIX_K3
+                        flags += cv2.CALIB_FIX_K5
+                        flags += cv2.CALIB_FIX_K6
 
-            elif isinstance(self.model, int):
-                flags = self.model
-            # print(flags)
-            if self.traceLevel == 3 or self.traceLevel == 10:
-                print('Printing Extrinsics guesses...')
-                print(r_in)
-                print(t_in)
-            ret, M1, d1, M2, d2, R, T, E, F, _ = cv2.stereoCalibrateExtended(
+                elif isinstance(self.model, int):
+                    flags = self.model
+                # print(flags)
+                if self.traceLevel == 3 or self.traceLevel == 10:
+                    print('Printing Extrinsics guesses...')
+                    print(r_in)
+                    print(t_in)
+                ret, M1, d1, M2, d2, R, T, E, F, _ = cv2.stereoCalibrateExtended(
                 obj_pts, left_corners_sampled, right_corners_sampled,
                 cameraMatrix_l, distCoeff_l, cameraMatrix_r, distCoeff_r, None,
+                R=r_in, T=t_in, criteria=stereocalib_criteria , flags=flags)
+            else:
+                flags = cv2.CALIB_FIX_INTRINSIC
+                ret, M1, d1, M2, d2, R, T, E, F, _ = cv2.stereoCalibrateExtended(
+                obj_pts, left_corners_sampled, right_corners_sampled,
+                np.eye(3), None, np.eye(3), None, None,
                 R=r_in, T=t_in, criteria=stereocalib_criteria , flags=flags)
 
             r_euler = Rotation.from_matrix(R).as_euler('xyz', degrees=True)
             print(f'Reprojection error is {ret}')
-            if self.traceLevel == 3 or self.traceLevel == 10:
-                print('Printing Extrinsics res...')
-                print(R)
-                print(T)
-                print(f'Euler angles in XYZ {r_euler} degs')
+            print('Printing Extrinsics res...')
+            print(R)
+            print(T)
+            print(f'Euler angles in XYZ {r_euler} degs')
 
 
             R_l, R_r, P_l, P_r, Q, validPixROI1, validPixROI2 = cv2.stereoRectify(
@@ -1109,7 +1136,7 @@ class StereoCalibration(object):
                 img_concat, (0, 0), fx=0.8, fy=0.8)
 
             # show image
-            # cv2.imshow('Stereo Pair', img_concat)
+            cv2.imshow('Stereo Pair', img_concat)
             k = cv2.waitKey(0)
             if k == 27:  # Esc key to stop
                 break
@@ -1240,9 +1267,6 @@ class StereoCalibration(object):
 
                 # print("Average Epipolar in test Error per image on host in " + img_pth_right.name + " : " +
                 #       str(localError))
-            else:
-                print('Numer of corners is in left -> {} and right -> {}'.format(
-                    len(marker_corners_l), len(marker_corners_r)))
                 raise SystemExit(1)
 
         epi_error_sum = 0
@@ -1257,10 +1281,11 @@ class StereoCalibration(object):
         return avg_epipolar
 
 
-    def test_epipolar_charuco(self, left_img_pth, right_img_pth, M_l, d_l, M_r, d_r, t, r_l, r_r):
+    def test_epipolar_charuco(self, left_name, right_name, left_img_pth, right_img_pth, M_l, d_l, M_r, d_r, t, r_l, r_r):
         images_left = glob.glob(left_img_pth + '/*.png')
         images_right = glob.glob(right_img_pth + '/*.png')
         images_left.sort()
+        print(images_left)
         images_right.sort()
         assert len(images_left) != 0, "ERROR: Images not read correctly"
         assert len(images_right) != 0, "ERROR: Images not read correctly"
@@ -1324,15 +1349,17 @@ class StereoCalibration(object):
         movePos = True
 
 
-
-        if self.cameraModel == 'perspective':
+        print(self.calib_model[left_name], self.calib_model[right_name])
+        if self.calib_model[left_name] == 'perspective':
             mapx_l, mapy_l = cv2.initUndistortRectifyMap(
                 M_lp, d_l, r_l, kScaledL, scaled_res[::-1], cv2.CV_32FC1)
-            mapx_r, mapy_r = cv2.initUndistortRectifyMap(
-                M_rp, d_r, r_r, kScaledR, scaled_res[::-1], cv2.CV_32FC1)
         else:
             mapx_l, mapy_l = cv2.fisheye.initUndistortRectifyMap(
                 M_lp, d_l, r_l, kScaledL, scaled_res[::-1], cv2.CV_32FC1)
+        if self.calib_model[right_name] == "perspective":
+            mapx_r, mapy_r = cv2.initUndistortRectifyMap(
+                M_rp, d_r, r_r, kScaledR, scaled_res[::-1], cv2.CV_32FC1)
+        else:
             mapx_r, mapy_r = cv2.fisheye.initUndistortRectifyMap(
                 M_rp, d_r, r_r, kScaledR, scaled_res[::-1], cv2.CV_32FC1)
 
@@ -1395,10 +1422,8 @@ class StereoCalibration(object):
                          (0, 255, 0), 1)
                 line_row += 30
 
-            # cv2.imshow('Stereo Pair', img_concat)
-            # k = cv2.waitKey(0)
-            # if k == 27:  # Esc key to stop
-            #     break
+            #cv2.imshow('Stereo Pair', img_concat)
+            #k = cv2.waitKey(0)
             
             if res2_l[1] is not None and res2_r[2] is not None and len(res2_l[1]) > 3 and len(res2_r[1]) > 3:
 
@@ -1447,8 +1472,7 @@ class StereoCalibration(object):
                     print("Epipolar Error per image on host in " + img_pth_right.name + " : " +
                         str(localError))
             else:
-                print('Numer of corners is in left -> {} and right -> {}'.format(
-                    len(marker_corners_l), len(marker_corners_r)))
+                print('Numer of corners is in left -> and right ->')
                 return -1
             lText = cv2.putText(cv2.cvtColor(image_data_pair[0],cv2.COLOR_GRAY2RGB), img_pth_left.name, org, cv2.FONT_HERSHEY_SIMPLEX, 1, (2, 0, 255), 2, cv2.LINE_AA)
             rText = cv2.putText(cv2.cvtColor(image_data_pair[1],cv2.COLOR_GRAY2RGB), img_pth_right.name + " Error: " + str(localError), org, cv2.FONT_HERSHEY_SIMPLEX, 1, (2, 0, 255), 2, cv2.LINE_AA)
