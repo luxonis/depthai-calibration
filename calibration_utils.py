@@ -17,6 +17,8 @@ import matplotlib.pyplot as plt
 from scipy.interpolate import griddata
 
 import matplotlib.colors as colors
+
+per_ccm = False
 cdict = {'red':  ((0.0, 0.0, 0.0),   # no red at 0
           (0.5, 1.0, 1.0),   # all channels set to 1.0 at 0.5 to create white
           (1.0, 0.8, 0.8)),  # set to 0.8 so its not too bright at 1
@@ -296,19 +298,19 @@ class StereoCalibration(object):
                             print(f"dist {left_cam_info['name']}: {left_cam_info['dist_coeff']}")
                             print(f"dist {right_cam_info['name']}: {right_cam_info['dist_coeff']}")
                             print(f"Epipolar error {extrinsics[0]}")
-                            left_cam_info['extrinsics']['epipolar_error'] = extrinsics[0] 
-                            self.test_epipolar_charuco(left_cam_info['name'], 
-                                                        right_cam_info['name'],
-                                                        left_path, 
-                                                        right_path, 
-                                                        left_cam_info['intrinsics'], 
-                                                        left_cam_info['dist_coeff'], 
-                                                        right_cam_info['intrinsics'], 
-                                                        right_cam_info['dist_coeff'], 
-                                                        extrinsics[2], # Translation between left and right Cameras
-                                                        extrinsics[3], # Left Rectification rotation 
-                                                        extrinsics[4]) # Right Rectification rotation 
-                                                                                            
+                            left_cam_info['extrinsics']['epipolar_error'] = extrinsics[0]
+                            #self.test_epipolar_charuco(left_cam_info['name'], 
+                            #                            right_cam_info['name'],
+                            #                            left_path, 
+                            #                            right_path, 
+                            #                            left_cam_info['intrinsics'], 
+                            #                            left_cam_info['dist_coeff'], 
+                            #                            right_cam_info['intrinsics'], 
+                            #                            right_cam_info['dist_coeff'], 
+                            #                            extrinsics[2], # Translation between left and right Cameras
+                            #                            extrinsics[3], # Left Rectification rotation 
+                            #                            extrinsics[4]) # Right Rectification rotation 
+                            #                                                                
     
                             left_cam_info['extrinsics']['rotation_matrix'] = extrinsics[1]
                             left_cam_info['extrinsics']['translation'] = extrinsics[2]
@@ -976,71 +978,33 @@ class StereoCalibration(object):
 
         stereocalib_criteria = (cv2.TERM_CRITERIA_COUNT +
                                 cv2.TERM_CRITERIA_EPS, 30, 1e-9)
-
-        for i in range(len(left_corners_sampled)):
-            if self.calib_model[left_name] == "perspective":
-                left_corners_sampled[i] = cv2.undistortPoints(np.array(left_corners_sampled[i]), cameraMatrix_l, distCoeff_l)
-            else:
-                left_corners_sampled[i] = cv2.fisheye.undistortPoints(np.array(left_corners_sampled[i]), cameraMatrix_l, distCoeff_l)
-        for i in range(len(right_corners_sampled)):
-            if self.calib_model[right_name] == "perspective":
-                right_corners_sampled[i] = cv2.undistortPoints(np.array(right_corners_sampled[i]), cameraMatrix_r, distCoeff_r)
-            else:
-                right_corners_sampled[i] = cv2.fisheye.undistortPoints(np.array(right_corners_sampled[i]), cameraMatrix_r, distCoeff_r)
-        if self.cameraModel == 'perspective':
-            if False:
-                flags = 0
-                # flags |= cv2.CALIB_USE_EXTRINSIC_GUESS
-                # print(flags)
-                flags = cv2.CALIB_FIX_INTRINSIC
-                if self.ccm_model != {}:
-                    self.model = self.ccm_model
-                if self.model == None:
-                    flags += cv2.CALIB_RATIONAL_MODEL
-                elif isinstance(self.model, str):
-                    if self.model == "NORMAL":
-                        flags += cv2.CALIB_RATIONAL_MODEL
-                    if self.model == "TILTED":
-                        flags += cv2.CALIB_RATIONAL_MODEL 
-                        flags += cv2.CALIB_TILTED_MODEL
-
-                    elif self.model == "PRISM":
-                        flags += cv2.CALIB_RATIONAL_MODEL 
-                        flags += cv2.CALIB_TILTED_MODEL
-                        flags += cv2.CALIB_THIN_PRISM_MODEL
-                    elif self.model == "THERMAL":
-                        print("Using THERMAL model")
-                        flags += cv2.CALIB_RATIONAL_MODEL
-                        flags += cv2.CALIB_FIX_K3
-                        flags += cv2.CALIB_FIX_K5
-                        flags += cv2.CALIB_FIX_K6
-
-                elif isinstance(self.model, int):
-                    flags = self.model
-                # print(flags)
-                if self.traceLevel == 3 or self.traceLevel == 10:
-                    print('Printing Extrinsics guesses...')
-                    print(r_in)
-                    print(t_in)
-                ret, M1, d1, M2, d2, R, T, E, F, _ = cv2.stereoCalibrateExtended(
-                obj_pts, left_corners_sampled, right_corners_sampled,
-                cameraMatrix_l, distCoeff_l, cameraMatrix_r, distCoeff_r, None,
-                R=r_in, T=t_in, criteria=stereocalib_criteria , flags=flags)
-            else:
-                flags = cv2.CALIB_FIX_INTRINSIC
-                ret, M1, d1, M2, d2, R, T, E, F, _ = cv2.stereoCalibrateExtended(
-                obj_pts, left_corners_sampled, right_corners_sampled,
-                np.eye(3), None, np.eye(3), None, None,
-                R=r_in, T=t_in, criteria=stereocalib_criteria , flags=flags)
+        if per_ccm:
+            for i in range(len(left_corners_sampled)):
+                if self.calib_model[left_name] == "perspective":
+                    left_corners_sampled[i] = cv2.undistortPoints(np.array(left_corners_sampled[i]), cameraMatrix_l, distCoeff_l)
+                    #left_corners_sampled[i] = cv2.undistortPoints(np.array(left_corners_sampled[i]), cameraMatrix_l, None)
+                else:
+                    left_corners_sampled[i] = cv2.fisheye.undistortPoints(np.array(left_corners_sampled[i]), cameraMatrix_l, distCoeff_l)
+                    #left_corners_sampled[i] = cv2.fisheye.undistortPoints(np.array(left_corners_sampled[i]), cameraMatrix_l, None)
+            for i in range(len(right_corners_sampled)):
+                if self.calib_model[right_name] == "perspective":
+                    right_corners_sampled[i] = cv2.undistortPoints(np.array(right_corners_sampled[i]), cameraMatrix_r, distCoeff_r)
+                    #right_corners_sampled[i] = cv2.undistortPoints(np.array(right_corners_sampled[i]), cameraMatrix_r, None)
+                else:
+                    right_corners_sampled[i] = cv2.fisheye.undistortPoints(np.array(right_corners_sampled[i]), cameraMatrix_r, distCoeff_r)
+                    #right_corners_sampled[i] = cv2.fisheye.undistortPoints(np.array(right_corners_sampled[i]), cameraMatrix_r, None)
+            flags = cv2.CALIB_FIX_INTRINSIC
+            ret, M1, d1, M2, d2, R, T, E, F, _ = cv2.stereoCalibrateExtended(
+            obj_pts, left_corners_sampled, right_corners_sampled,
+            np.eye(3), None, np.eye(3), None, None,
+            R=r_in, T=t_in, criteria=stereocalib_criteria , flags=flags)
 
             r_euler = Rotation.from_matrix(R).as_euler('xyz', degrees=True)
-            print(f'Reprojection error is {ret}')
+            print(f'Epipolar error is {ret}')
             print('Printing Extrinsics res...')
             print(R)
             print(T)
-            print(f'Euler angles in XYZ {r_euler} degs')
-
-
+            print(f'Euler angles in XYZ {r_euler} degs')    
             R_l, R_r, P_l, P_r, Q, validPixROI1, validPixROI2 = cv2.stereoRectify(
                 cameraMatrix_l,
                 distCoeff_l,
@@ -1055,63 +1019,127 @@ class StereoCalibration(object):
             r_euler = Rotation.from_matrix(R_r).as_euler('xyz', degrees=True)
             if self.traceLevel == 5 or self.traceLevel == 10:
                 print(f'R_R Euler angles in XYZ {r_euler}')
-            
+
             # print(f'P_l is \n {P_l}')
-            # print(f'P_r is \n {P_r}')
-
+            # print(f'P_r is \n {P_r}') 
             return [ret, R, T, R_l, R_r, P_l, P_r]
-        elif self.cameraModel == 'fisheye':
-            # make sure all images have the same *number of* points
-            min_num_points = min([len(pts) for pts in obj_pts])
-            obj_pts_truncated = [pts[:min_num_points] for pts in obj_pts]
-            left_corners_truncated = [pts[:min_num_points] for pts in left_corners_sampled]
-            right_corners_truncated = [pts[:min_num_points] for pts in right_corners_sampled]
-
-            flags = 0
-            # flags |= cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC
-            # flags |= cv2.fisheye.CALIB_CHECK_COND
-            # flags |= cv2.fisheye.CALIB_FIX_SKEW
-            flags |= cv2.fisheye.CALIB_FIX_INTRINSIC
-            # flags |= cv2.fisheye.CALIB_FIX_K1
-            # flags |= cv2.fisheye.CALIB_FIX_K2
-            # flags |= cv2.fisheye.CALIB_FIX_K3 
-            # flags |= cv2.fisheye.CALIB_FIX_K4
-            # flags |= cv2.CALIB_RATIONAL_MODEL
-            # TODO(sACHIN): Try without intrinsic guess
-            # flags |= cv2.CALIB_USE_INTRINSIC_GUESS
-            # TODO(sACHIN): Try without intrinsic guess
-            # flags |= cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC
-            # flags = cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC + cv2.fisheye.CALIB_CHECK_COND + cv2.fisheye.CALIB_FIX_SKEW
-            if self.traceLevel == 3 or self.traceLevel == 10:
-                print('Fisyeye stereo model..................') 
-            (ret, M1, d1, M2, d2, R, T), E, F = cv2.fisheye.stereoCalibrate(
-                obj_pts_truncated, left_corners_truncated, right_corners_truncated,
+        else:
+            if self.cameraModel == 'perspective':
+                flags = 0
+                # flags |= cv2.CALIB_USE_EXTRINSIC_GUESS
+                # print(flags)
+                flags = cv2.CALIB_FIX_INTRINSIC
+                if self.ccm_model != {}:
+                    self.model = self.ccm_model
+                if self.model == None:
+                    flags += cv2.CALIB_RATIONAL_MODEL
+                elif isinstance(self.model, str):
+                    if self.model == "NORMAL":
+                        flags += cv2.CALIB_RATIONAL_MODEL
+                    if self.model == "TILTED":
+                        flags += cv2.CALIB_RATIONAL_MODEL 
+                        flags += cv2.CALIB_TILTED_MODEL
+                    elif self.model == "PRISM":
+                        flags += cv2.CALIB_RATIONAL_MODEL 
+                        flags += cv2.CALIB_TILTED_MODEL
+                        flags += cv2.CALIB_THIN_PRISM_MODEL
+                    elif self.model == "THERMAL":
+                        print("Using THERMAL model")
+                        flags += cv2.CALIB_RATIONAL_MODEL
+                        flags += cv2.CALIB_FIX_K3
+                        flags += cv2.CALIB_FIX_K5
+                        flags += cv2.CALIB_FIX_K6
+                elif isinstance(self.model, int):
+                    flags = self.model
+                # print(flags)
+                if self.traceLevel == 3 or self.traceLevel == 10:
+                    print('Printing Extrinsics guesses...')
+                    print(r_in)
+                    print(t_in)
+                ret, M1, d1, M2, d2, R, T, E, F, _ = cv2.stereoCalibrateExtended(
+                obj_pts, left_corners_sampled, right_corners_sampled,
                 cameraMatrix_l, distCoeff_l, cameraMatrix_r, distCoeff_r, None,
-                flags=flags, criteria=stereocalib_criteria), None, None
-            r_euler = Rotation.from_matrix(R).as_euler('xyz', degrees=True)
-            print(f'Reprojection error is {ret}')
-            if self.traceLevel == 3 or self.traceLevel == 10:
+                R=r_in, T=t_in, criteria=stereocalib_criteria , flags=flags)
+
+                r_euler = Rotation.from_matrix(R).as_euler('xyz', degrees=True)
+                print(f'Epipolar error is {ret}')
                 print('Printing Extrinsics res...')
                 print(R)
                 print(T)
                 print(f'Euler angles in XYZ {r_euler} degs')
-            isHorizontal = np.absolute(T[0]) > np.absolute(T[1])
-            
-            R_l, R_r, P_l, P_r, Q = cv2.fisheye.stereoRectify(
-                cameraMatrix_l,
-                distCoeff_l,
-                cameraMatrix_r,
-                distCoeff_r,
-                None, R, T, flags=0)
-            
-            r_euler = Rotation.from_matrix(R_l).as_euler('xyz', degrees=True)
-            if self.traceLevel == 3 or self.traceLevel == 10:
-                print(f'R_L Euler angles in XYZ {r_euler}')
-            r_euler = Rotation.from_matrix(R_r).as_euler('xyz', degrees=True)
-            if self.traceLevel == 3 or self.traceLevel == 10:
-                print(f'R_R Euler angles in XYZ {r_euler}')            
-            
-            return [ret, R, T, R_l, R_r, P_l, P_r]
+
+
+                R_l, R_r, P_l, P_r, Q, validPixROI1, validPixROI2 = cv2.stereoRectify(
+                    cameraMatrix_l,
+                    distCoeff_l,
+                    cameraMatrix_r,
+                    distCoeff_r,
+                    None, R, T) # , alpha=0.1
+                # self.P_l = P_l
+                # self.P_r = P_r
+                r_euler = Rotation.from_matrix(R_l).as_euler('xyz', degrees=True)
+                if self.traceLevel == 5 or self.traceLevel == 10:
+                    print(f'R_L Euler angles in XYZ {r_euler}')
+                r_euler = Rotation.from_matrix(R_r).as_euler('xyz', degrees=True)
+                if self.traceLevel == 5 or self.traceLevel == 10:
+                    print(f'R_R Euler angles in XYZ {r_euler}')
+
+                # print(f'P_l is \n {P_l}')
+                # print(f'P_r is \n {P_r}')
+
+                return [ret, R, T, R_l, R_r, P_l, P_r]
+            elif self.cameraModel == 'fisheye':
+                # make sure all images have the same *number of* points
+                min_num_points = min([len(pts) for pts in obj_pts])
+                obj_pts_truncated = [pts[:min_num_points] for pts in obj_pts]
+                left_corners_truncated = [pts[:min_num_points] for pts in left_corners_sampled]
+                right_corners_truncated = [pts[:min_num_points] for pts in right_corners_sampled]
+
+                flags = 0
+                # flags |= cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC
+                # flags |= cv2.fisheye.CALIB_CHECK_COND
+                # flags |= cv2.fisheye.CALIB_FIX_SKEW
+                flags |= cv2.fisheye.CALIB_FIX_INTRINSIC
+                # flags |= cv2.fisheye.CALIB_FIX_K1
+                # flags |= cv2.fisheye.CALIB_FIX_K2
+                # flags |= cv2.fisheye.CALIB_FIX_K3 
+                # flags |= cv2.fisheye.CALIB_FIX_K4
+                # flags |= cv2.CALIB_RATIONAL_MODEL
+                # TODO(sACHIN): Try without intrinsic guess
+                # flags |= cv2.CALIB_USE_INTRINSIC_GUESS
+                # TODO(sACHIN): Try without intrinsic guess
+                # flags |= cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC
+                # flags = cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC + cv2.fisheye.CALIB_CHECK_COND + cv2.fisheye.CALIB_FIX_SKEW
+                if self.traceLevel == 3 or self.traceLevel == 10:
+                    print('Fisyeye stereo model..................') 
+                (ret, M1, d1, M2, d2, R, T), E, F = cv2.fisheye.stereoCalibrate(
+                    obj_pts_truncated, left_corners_truncated, right_corners_truncated,
+                    cameraMatrix_l, distCoeff_l, cameraMatrix_r, distCoeff_r, None,
+                    flags=flags, criteria=stereocalib_criteria), None, None
+                r_euler = Rotation.from_matrix(R).as_euler('xyz', degrees=True)
+                print(f'Reprojection error is {ret}')
+                if self.traceLevel == 3 or self.traceLevel == 10:
+                    print('Printing Extrinsics res...')
+                    print(R)
+                    print(T)
+                    print(f'Euler angles in XYZ {r_euler} degs')
+                isHorizontal = np.absolute(T[0]) > np.absolute(T[1])
+
+                R_l, R_r, P_l, P_r, Q = cv2.fisheye.stereoRectify(
+                    cameraMatrix_l,
+                    distCoeff_l,
+                    cameraMatrix_r,
+                    distCoeff_r,
+                    None, R, T, flags=0)
+
+                r_euler = Rotation.from_matrix(R_l).as_euler('xyz', degrees=True)
+                if self.traceLevel == 3 or self.traceLevel == 10:
+                    print(f'R_L Euler angles in XYZ {r_euler}')
+                r_euler = Rotation.from_matrix(R_r).as_euler('xyz', degrees=True)
+                if self.traceLevel == 3 or self.traceLevel == 10:
+                    print(f'R_R Euler angles in XYZ {r_euler}')            
+
+                return [ret, R, T, R_l, R_r, P_l, P_r]
 
     def display_rectification(self, image_data_pairs, images_corners_l, images_corners_r, image_epipolar_color, isHorizontal):
         print(
