@@ -145,6 +145,7 @@ class StereoCalibration(object):
         self.traceLevel = traceLevel
         self.output_scale_factor = outputScaleFactor
         self.disableCamera = disableCamera
+        self.errors = {}
 
         """Class to Calculate Calibration and Rectify a Stereo Camera."""
 
@@ -164,6 +165,8 @@ class StereoCalibration(object):
         self.intrinsic_img = intrinsic_img
         self.extrinsic_img = extrinsic_img
         self.cameraModel = camera_model
+        self.cameraIntrinsics = {}
+        self.cameraDistortion = {}
         self.distortion_model = {}
         self.calib_model = {}
         self.collected_features = {}
@@ -192,7 +195,7 @@ class StereoCalibration(object):
                 image_files.sort()
                 for im in image_files:
                     frame = cv2.imread(im)
-                    self.height, self.width, _ = frame.shape
+                    self.height, self.width, _ = 1280, 800, 0
                     widthRatio = resizeWidth / self.width
                     heightRatio = resizeHeight / self.height
                     if (widthRatio > 0.8 and heightRatio > 0.8 and widthRatio <= 1.0 and heightRatio <= 1.0) or (widthRatio > 1.2 and heightRatio > 1.2) or (resizeHeight == 0):
@@ -217,9 +220,33 @@ class StereoCalibration(object):
 
 
                 features = None
+                self.img_path = glob.glob(images_path + "/*")
+                self.img_path.sort()
                 if per_ccm:
                     all_features, all_ids, imsize = self.getting_features(images_path, cam_info["name"], features=features)
-                    removed_features, filtered_features, filtered_ids = self.filtering_features(all_features, all_ids, cam_info["name"],imsize,cam_info["hfov"])
+                    cam_info["imsize"] = imsize
+
+                    f = imsize[0] / (2 * np.tan(np.deg2rad(cam_info["hfov"]/2)))
+                    print("INTRINSIC CALIBRATION")
+                    cameraMatrixInit = np.array([[f,    0.0,      imsize[0]/2],
+                                                 [0.0,     f,      imsize[1]/2],
+                                                 [0.0,   0.0,        1.0]])
+                    if cam_info["name"] not in self.cameraIntrinsics.keys():
+                        self.cameraIntrinsics[cam_info["name"]] = cameraMatrixInit
+
+                    if self.traceLevel == 3 or self.traceLevel == 10:
+                        print(
+                            f'Camera Matrix initialization with HFOV of {cam_info["name"]} is.............')
+                        print(cameraMatrixInit)
+                    distCoeffsInit = np.zeros((5, 1))
+                    if cam_info["name"] not in self.cameraDistortion:
+                        self.cameraDistortion[cam_info["name"]] = distCoeffsInit
+
+                    if cam_info["name"] in self.intrinsic_img:
+                        all_features, all_ids, filtered_images = self.remove_features(filtered_features, filtered_ids, self.intrinsic_img[cam_info["name"]], image_files)
+                    else:
+                        filtered_images = images_path
+                    removed_features, filtered_features, filtered_ids = self.filtering_features(all_features, all_ids, cam_info["name"],imsize,cam_info["hfov"], cameraMatrixInit, distCoeffsInit)
                     if  cam_info["name"] not in self.collected_features.keys():
                         self.collected_features[cam_info["name"]] = filtered_features
                     if  cam_info["name"] not in self.collected_ids.keys():
@@ -228,16 +255,14 @@ class StereoCalibration(object):
                     cam_info['filtered_ids'] = filtered_ids
                     cam_info['filtered_corners'] = filtered_features
 
-                    if cam_info["name"] in self.intrinsic_img:
-                        filtered_features, filtered_ids, filtered_images = self.remove_features(filtered_features, filtered_ids, self.intrinsic_img[cam_info["name"]], image_files)
-                    else:
-                        filtered_images = images_path
-                    ret, intrinsics, dist_coeff, _, _, filtered_ids, filtered_corners, size, coverageImage, all_corners, all_ids = self.calibrate_wf_intrinsics(cam_info["name"], filtered_features, filtered_ids, imsize, cam_info["hfov"], features, filtered_images)
+                    ret, intrinsics, dist_coeff, _, _, filtered_ids, filtered_corners, size, coverageImage, all_corners, all_ids = self.calibrate_wf_intrinsics(cam_info["name"], all_features, all_ids, filtered_features, filtered_ids, cam_info["imsize"], cam_info["hfov"], features, filtered_images)
                 else:
                     ret, intrinsics, dist_coeff, _, _, filtered_ids, filtered_corners, size, coverageImage, all_corners, all_ids = self.calibrate_intrinsics(
                         images_path, cam_info['hfov'], cam_info["name"])
                     cam_info['filtered_ids'] = filtered_ids
                     cam_info['filtered_corners'] = filtered_corners
+                self.cameraIntrinsics[cam_info["name"]] = intrinsics
+                self.cameraDistortion[cam_info["name"]] = dist_coeff
                 cam_info['intrinsics'] = intrinsics
                 cam_info['dist_coeff'] = dist_coeff
                 cam_info['size'] = size # (Width, height)
@@ -311,7 +336,9 @@ class StereoCalibration(object):
                                         array = self.extrinsic_img[left_cam_info["name"]]
                                     left_cam_info['filtered_corners'], left_cam_info['filtered_ids'], filtered_images = self.remove_features(left_cam_info['filtered_corners'], left_cam_info['filtered_ids'], array)
                                     right_cam_info['filtered_corners'], right_cam_info['filtered_ids'], filtered_images = self.remove_features(right_cam_info['filtered_corners'], right_cam_info['filtered_ids'], array)
-
+                                    removed_features, left_cam_info['filtered_corners'], left_cam_info['filtered_ids'] = self.filtering_features(left_cam_info['filtered_corners'], left_cam_info['filtered_ids'], left_cam_info["name"],left_cam_info["imsize"],left_cam_info["hfov"], self.cameraIntrinsics["name"], self.cameraDistortion["name"])
+                                    removed_features, right_cam_info['filtered_corners'], right_cam_info['filtered_ids'] = self.filtering_features(right_cam_info['filtered_corners'], right_cam_info['filtered_ids'], right_cam_info["name"], right_cam_info["imsize"], right_cam_info["hfov"], self.cameraIntrinsics["name"], self.cameraDistortion["name"])
+                            
                             extrinsics = self.calibrate_stereo(left_cam_info['name'], right_cam_info['name'], left_cam_info['filtered_ids'], left_cam_info['filtered_corners'], right_cam_info['filtered_ids'], right_cam_info['filtered_corners'], left_cam_info['intrinsics'], left_cam_info[
                                                                    'dist_coeff'], right_cam_info['intrinsics'], right_cam_info['dist_coeff'], translation, rotation, features)
                             if extrinsics[0] == -1:
@@ -390,39 +417,23 @@ class StereoCalibration(object):
             return allCorners, allIds, imsize
         ###### ADD HERE WHAT IT IS NEEDED ######
 
-    def filtering_features(self,allCorners, allIds, name,imsize, hfov):
-        """
-        Calibrates the camera using the dected corners.
-        """
-        f = imsize[0] / (2 * np.tan(np.deg2rad(hfov/2)))
+    def filtering_features(self,allCorners, allIds, name,imsize, hfov, cameraMatrixInit, distCoeffsInit):
 
-        print("INTRINSIC CALIBRATION")
-        cameraMatrixInit = np.array([[f,    0.0,      imsize[0]/2],
-                                     [0.0,     f,      imsize[1]/2],
-                                     [0.0,   0.0,        1.0]])
-       
-        if self.traceLevel == 3 or self.traceLevel == 10:
-            print(
-                f'Camera Matrix initialization with HFOV of {hfov} is.............')
-            print(cameraMatrixInit)
-
-        distCoeffsInit = np.zeros((5, 1))
-        print("looking for misdetected corners")
          # check if there are any suspicious corners with high reprojection error
         rvecs = []
         tvecs = []
-        if name in self.intrinsic_img.keys():
-            for index in self.intrinsic_img[name]:
-                allCorners.pop(index)
-                allIds.pop(index)
-
         for corners, ids in zip(allCorners, allIds):
             objpts = self.charuco_ids_to_objpoints(ids)
             rvec, tvec = self.camera_pose_charuco(objpts, corners, cameraMatrixInit, distCoeffsInit)
             tvecs.append(tvec)
             rvecs.append(rvec)
-        corners_removed, filtered_ids, filtered_corners = self.filter_corner_outliers(allIds, allCorners, cameraMatrixInit, distCoeffsInit, rvecs, tvecs)
-        return corners_removed, filtered_corners, filtered_ids
+
+        # Here we need to get initialK and parameters for each camera ready and fill them inside reconstructed reprojection error per point
+        ret = 0.0
+        threshold = 10.0
+
+        filtered_corners, filtered_ids,all_error, removed_corners, removed_ids, removed_error = self.features_filtering_function(rvecs, tvecs, cameraMatrixInit, distCoeffsInit, ret, allCorners, allIds, camera = name, threshold = threshold)
+        return removed_corners, filtered_corners, filtered_ids
     
     def remove_features(self, allCorners, allIds, array, img_files = None):
         filteredCorners = allCorners.copy()
@@ -441,30 +452,26 @@ class StereoCalibration(object):
     def get_distortion_flags(self,name):
         if self.distortion_model[name] == None:
             print("Use DEFAULT model")
-            model_name = "DEFAULT"
             flags = cv2.CALIB_RATIONAL_MODEL
+            flags += cv2.CALIB_TILTED_MODEL
 
         elif isinstance(self.distortion_model[name], str):
             if self.distortion_model[name] == "NORMAL":
                 print("Using NORMAL model")
-                model_name = "NORMAL"
                 flags = cv2.CALIB_RATIONAL_MODEL
 
             elif self.distortion_model[name] == "TILTED":
                 print("Using TILTED model")
-                model_name = "TILTED"
                 flags = cv2.CALIB_RATIONAL_MODEL
                 flags += cv2.CALIB_TILTED_MODEL
 
             elif self.distortion_model[name] == "PRISM":
                 print("Using PRISM model")
-                model_name = "PRISM"
                 flags = cv2.CALIB_RATIONAL_MODEL
                 flags += cv2.CALIB_TILTED_MODEL
                 flags += cv2.CALIB_THIN_PRISM_MODEL
 
             elif self.distortion_model[name] == "THERMAL":
-                model_name = "THERMAL"
                 print("Using THERMAL model")
                 flags = cv2.CALIB_RATIONAL_MODEL
                 flags += cv2.CALIB_FIX_K3
@@ -474,9 +481,9 @@ class StereoCalibration(object):
         elif isinstance(self.distortion_model[name], int):
             print("Using CUSTOM flags")
             flags = self.distortion_model[name]
-        return flags, model_name
+        return flags
 
-    def calibrate_wf_intrinsics(self, name, allCorners, allIds, imsize, hfov, features, image_files):
+    def calibrate_wf_intrinsics(self, name, all_Features, all_features_Ids, allCorners, allIds, imsize, hfov, features, image_files):
         image_files = glob.glob(image_files + "/*")
         image_files.sort()
         coverageImage = np.ones(imsize[::-1], np.uint8) * 255
@@ -484,16 +491,19 @@ class StereoCalibration(object):
         coverageImage = self.draw_corners(allCorners, coverageImage)
         if self.calib_model[name] == 'perspective':
             if features == None or features == "charucos":
-                distortion_flags, model_name = self.get_distortion_flags(name)
+                distortion_flags = self.get_distortion_flags(name)
                 ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, filtered_ids, filtered_corners, allCorners, allIds  = self.calibrate_camera_charuco(
-                    allCorners, allIds, imsize, hfov, name, distortion_flags)
+                    all_Features, all_features_Ids,allCorners, allIds, imsize, hfov, name, distortion_flags)
                 if self.filtering_enable or self.traceLevel != 0:
-                    filtered_corners, filtered_ids = self.calculate_reprojection(rotation_vectors, translation_vectors, camera_matrix, distortion_coefficients, ret, filtered_corners, filtered_ids, camera = name)
+                    filtered_corners, filtered_ids,all_error, removed_corners, removed_ids, removed_error = self.features_filtering_function(rotation_vectors, translation_vectors, camera_matrix, distortion_coefficients, ret, filtered_corners, filtered_ids, camera = name)
                     ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, filtered_ids, filtered_corners, allCorners, allIds  = self.calibrate_camera_charuco(
-                        filtered_corners, filtered_ids, imsize, hfov, name, distortion_flags)
+                        all_Features, all_features_Ids, filtered_corners, filtered_ids, imsize, hfov, name, distortion_flags)
+            if self.charucos == {}:
                 self.undistort_visualization(
                     image_files, camera_matrix, distortion_coefficients, imsize, name)
 
+                return ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, filtered_ids, filtered_corners, imsize, coverageImage, allCorners, allIds
+            else:
                 return ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, filtered_ids, filtered_corners, imsize, coverageImage, allCorners, allIds
             #### ADD ADDITIONAL FEATURES CALIBRATION ####
         else:
@@ -525,7 +535,7 @@ class StereoCalibration(object):
         # Draw the line on the image
         cv2.line(displayframe, start_point, end_point, color, thickness)
         return displayframe
-    def calculate_reprojection(self,rvecs, tvecs, cameraMatrix, distCoeffs, reprojection, filtered_corners,filtered_id, camera, display = True, threshold = 1, draw_quadrants = False, nx = 4, ny = 4):
+    def features_filtering_function(self,rvecs, tvecs, cameraMatrix, distCoeffs, reprojection, filtered_corners,filtered_id, camera, display = True, threshold = 1.0, draw_quadrants = False, nx = 4, ny = 4):
         whole_error = []
         all_points = []
         all_corners = []
@@ -534,68 +544,49 @@ class StereoCalibration(object):
         removed_corners = []
         removed_points = []
         removed_ids = []
+        removed_error = []
         display_corners = []
         display_points = []
         circle_size = 0
-
-        for i, (corners, ids) in enumerate(zip(filtered_corners, filtered_id)):
-            total_error_squared = 0
-            total_points = 0
-            if ids is not None and len(corners) > 0:
-                # Convert detected corner IDs to integer for indexing
-                ids = ids.flatten()
-
-                # Prepare object points (3D points) - these are based on the known geometry of the ChArUco board
+        reported_error = []
+        for i, (corners, ids, frame_path) in enumerate(zip(filtered_corners, filtered_id, self.img_path)):
+            frame = cv2.imread(frame_path)
+            if ids is not None and corners.size > 0:
+                ids = ids.flatten()  # Flatten the IDs from 2D to 1D
                 objPoints = np.array([self.board.chessboardCorners[id] for id in ids], dtype=np.float32)
-
-                # Project the 3D object points to 2D image points
                 imgpoints2, _ = cv2.projectPoints(objPoints, rvecs[i], tvecs[i], cameraMatrix, distCoeffs)
+                corners2 = corners.reshape(-1, 2)
+                imgpoints2 = imgpoints2.reshape(-1, 2)
 
-                # Flatten the corners to match the projected points' shape
-                corners2 = np.array(corners, dtype=np.float32).reshape(-1, 2)
-                imgpoints2 = imgpoints2.reshape(-1,2)
-                def find_index_of_array(pairs, target):
-                    pairs_array = np.array(pairs)
-                    target_array = np.array(target)
-                    # Compare all pairs against the target array along axis 1
-                    matches = np.all(pairs_array == target_array, axis=1)
-                    # Find the index of the first match
-                    match_indices = np.where(matches)[0]
-                    return match_indices[0] if match_indices.size > 0 else -1
+                errors = np.linalg.norm(corners2 - imgpoints2, axis=1)
+                valid_mask = errors <= threshold
+                removed_mask = ~valid_mask
 
-                inede = 0
-                img_error = []
-                for corner, point, id in zip(corners2, imgpoints2, ids):
-                    each_error = cv2.norm(corner,point, cv2.NORM_L2)
-                    if each_error > threshold:
-                        removed_corners.append(corner)
-                        removed_points.append(point)
-                        removed_ids.append(id)
-                        index = find_index_of_array(corners2, corner)
-                        #print("Index of target array:", index)
-                        corners2 = np.delete(corners2, index, axis=0)
-                        imgpoints2 = np.delete(imgpoints2, index, axis=0)
-                        ids = np.delete(ids, index, axis=0)
-                        inede += 1
-                    else:
-                        all_error.append(abs(each_error))
-                        display_corners.append(corner)
-                        display_points.append(point)
-                        img_error.append(each_error)
-                corners = corners2.reshape(-1, 1, 2)
-                all_corners.append(corners)
-                all_points.append(imgpoints2)
-                all_ids.append(ids)
+                # Collect valid IDs in the original format (array of arrays)
+                valid_ids = ids[valid_mask]
+                all_ids.append(valid_ids.reshape(-1, 1).astype(np.int32))  # Reshape and store as array of arrays
 
-                error = cv2.norm(corners2, imgpoints2.reshape(-1, 2), cv2.NORM_L2)
-                total_error_squared += error**2
-                total_points += len(objPoints)
+                # Collect data for valid points
+                reported_error.extend(errors)
+                all_error.extend(errors[valid_mask])
+                display_corners.extend(corners2[valid_mask])
+                display_points.extend(imgpoints2[valid_mask])
+                all_points.append(imgpoints2[valid_mask])  # Collect valid points for calibration
+                all_corners.append(corners2[valid_mask].reshape(-1, 1, 2))   # Collect valid corners for calibration
 
-            # Compute the overall RMS re-projection error
-            rms_error = np.sqrt(total_error_squared / total_points)
-            whole_error.append(rms_error)
-            if self.traceLevel == 2  or self.traceLevel == 4 or self.traceLevel == 10:
-                print(f"Overall RMS re-projection error for frame {i}: {rms_error}")
+                removed_corners.extend(corners2[removed_mask])
+                removed_points.extend(imgpoints2[removed_mask])
+                removed_ids.extend(ids[removed_mask])
+                removed_error.extend(errors[removed_mask])
+
+                total_error_squared = np.sum(errors[valid_mask]**2)
+                total_points = len(objPoints[valid_mask])
+                rms_error = np.sqrt(total_error_squared / total_points if total_points else 0)
+                whole_error.append(rms_error)
+
+                if self.traceLevel in {2, 4, 10}:
+                    print(f"Overall RMS re-projection error for frame {i}: {rms_error}")
+
             total_error_squared = 0
             total_points = 0
 
@@ -612,9 +603,9 @@ class StereoCalibration(object):
                 fig, ax = plt.subplots()
                 ax.add_artist(circle)
                 ax.set_title(f"Reprojection error for frame {i}, camera {camera}")
-                ax.scatter(np.array(imgpoints2).T[0], np.array(imgpoints2).T[1], label = "Original", alpha = 0.5, color = "Black")
-                img = ax.scatter(np.array(corners2).T[0], np.array(corners2).T[1], c=img_error, cmap = GnRd, label = "Reprojected", vmin=0, vmax=threshold)
-
+                ax.scatter(np.array(corners2).T[0], np.array(corners2).T[1], label = "Original", alpha = 0.5, color = "Black")
+                img = ax.scatter(np.array(imgpoints2).T[0], np.array(imgpoints2).T[1], c=errors, cmap = GnRd, label = "Reprojected", vmin=0, vmax=threshold)
+                ax.imshow(frame, alpha = 0.5)
                 ax.plot([],[], label = f"Rerprojection Remade: {round(rms_error, 4)}", color = "white")
                 ax.plot([],[], label = f"Whole Rerprojection OpenCV: {round(reprojection, 4)}", color = "white")
                 cbar = plt.colorbar(img, ax=ax)
@@ -627,7 +618,33 @@ class StereoCalibration(object):
                 plt.grid()
                 plt.show()
 
-            img_error = []
+            if self.traceLevel == 5 or self.traceLevel == 10:
+                centroid_x = np.mean(np.array(removed_corners).T[0])
+                centroid_y = np.mean(np.array(removed_corners).T[1])
+
+                # Calculate distances from the center
+                distances = [distance((centroid_x, centroid_y), point) for point in np.array(corners2[removed_mask])]
+                max_distance = max(distances)
+                if max_distance > circle_size:
+                    circle_size = max_distance
+                circle = plt.Circle((centroid_x, centroid_y), circle_size, color='black', fill=True, label = "Calibrated area", alpha = 0.2)
+                fig, ax = plt.subplots()
+                ax.add_artist(circle)
+                ax.set_title(f"Removed error for frame {i}, camera {camera}")
+                ax.scatter(np.array(corners2[removed_mask]).T[0], np.array(corners2[removed_mask]).T[1], label = "Original", alpha = 0.5, color = "Black")
+                img = ax.scatter(np.array(imgpoints2[removed_mask]).T[0], np.array(imgpoints2[removed_mask]).T[1], c=errors[removed_mask], cmap = GnRd, label = "Reprojected", vmin=0, vmax=max(errors[removed_mask]))
+                ax.imshow(frame, alpha = 0.5)
+                ax.plot([],[], label = f"Rerprojection Remade: {round(np.mean(errors[removed_mask]), 4)}", color = "white")
+                ax.plot([],[], label = f"Whole Rerprojection OpenCV: {round(reprojection, 4)}", color = "white")
+                cbar = plt.colorbar(img, ax=ax)
+                cbar.set_label("Reprojection error")
+                ax.set_xlabel('Width')
+                ax.set_xlim([0,self.width])
+                ax.set_ylim([0,self.height])
+                ax.legend()
+                ax.set_ylabel('Y coordinate')
+                plt.grid()
+                plt.show()
 
         if self.traceLevel == 3 or self.traceLevel == 5 or self.traceLevel == 10:
             center_x, center_y = self.width / 2, self.height / 2
@@ -639,7 +656,7 @@ class StereoCalibration(object):
             ax.set_title(f"Reprojection map camera {camera}")
             ax.scatter(np.array(display_points).T[0], np.array(display_points).T[1], label = "Original", alpha = 0.5, color = "Black")
             img = ax.scatter(np.array(display_corners).T[0], np.array(display_corners).T[1], c=all_error, cmap = GnRd, label = "Reprojected", vmin=0, vmax=threshold)
-
+            ax.imshow(frame, alpha = 0.5)
             ax.plot([],[], label = f"Rerprojection Remade ALL: {round(np.sqrt(np.mean(np.array(whole_error)**2)), 4)}", color = "white")
             ax.plot([],[], label = f"Whole Rerprojection OpenCV: {round(reprojection, 4)}", color = "white")
             cbar = plt.colorbar(img, ax=ax)
@@ -652,7 +669,7 @@ class StereoCalibration(object):
             plt.grid()
             plt.show()
 
-        if self.traceLevel == 5 or self.traceLevel == 10:
+        if self.traceLevel == 3 or self.traceLevel == 5 or self.traceLevel == 10:
             x = np.array(display_points).T[0]
             y = np.array(display_points).T[1]
             z = np.array(all_error)
@@ -661,6 +678,17 @@ class StereoCalibration(object):
             y_flat = y.flatten()
             z_flat = z.flatten()
 
+            fig, ax = plt.subplots()
+
+            self.errors[camera] = z_flat
+            _, bins, _ = ax.hist(all_error, range= [0,30], bins = 100, label = f"{camera}", color= "Blue", edgecolor= "black")
+            ax.hist(removed_error, bins = bins, color= "Blue", edgecolor= "black")
+            ax.plot([],[], label = f"MAX : {max(reported_error)}")
+            ax.plot([],[], label = f"MIN : {min(reported_error)}")
+            ax.legend()
+            ax.set_title("Reprojection error for shorter dataset")
+            ax.set_xlabel("Reprojection error")
+            plt.show()
             grid_x, grid_y = np.mgrid[min(x_flat):max(x_flat):100j, min(y_flat):max(y_flat):100j]
             grid_z = abs(griddata((x_flat, y_flat), z_flat, (grid_x, grid_y), method='cubic'))
 
@@ -719,8 +747,7 @@ class StereoCalibration(object):
             cv2.imshow('Quadrants with Points', image)
             cv2.waitKey(0)
             cv2.destroyAllWindows()
-
-        return all_corners, all_ids
+        return all_corners ,all_ids, all_error, removed_corners, removed_ids, removed_error
 
     def detect_charuco_board(self, image: np.array):
         arucoParams = cv2.aruco.DetectorParameters_create()
@@ -862,11 +889,11 @@ class StereoCalibration(object):
         coverageImage = cv2.cvtColor(coverageImage, cv2.COLOR_GRAY2BGR)
         coverageImage = self.draw_corners(allCorners, coverageImage)
         if self.calib_model[name] == 'perspective':
-            distortion_flags, model_name = self.get_distortion_flags(name)
+            distortion_flags = self.get_distortion_flags(name)
             ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, filtered_ids, filtered_corners, allCorners, allIds  = self.calibrate_camera_charuco(
                 allCorners, allIds, imsize, hfov, name, distortion_flags)
             if self.filtering_enable or self.traceLevel != 0:
-                filtered_corners, filtered_ids = self.calculate_reprojection(rotation_vectors, translation_vectors, camera_matrix, distortion_coefficients, ret, filtered_corners, filtered_ids, camera = name)
+                filtered_corners, filtered_ids,all_error, removed_corners, removed_ids, removed_error = self.features_filtering_function(rotation_vectors, translation_vectors, camera_matrix, distortion_coefficients, ret, filtered_corners, filtered_ids, camera = name)
                 ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, filtered_ids, filtered_corners, allCorners, allIds  = self.calibrate_camera_charuco(
                     filtered_corners, filtered_ids, imsize, hfov, name, distortion_flags)
             self.undistort_visualization(
@@ -967,23 +994,30 @@ class StereoCalibration(object):
         return corners_removed, allIds, allCorners
 
 
-    def calibrate_camera_charuco(self, allCorners, allIds, imsize, hfov, name, distortion_flags):
+    def calibrate_camera_charuco(self, all_Features, all_features_Ids, allCorners, allIds, imsize, hfov, name, distortion_flags):
         """
         Calibrates the camera using the dected corners.
         """
         f = imsize[0] / (2 * np.tan(np.deg2rad(hfov/2)))
 
         print("INTRINSIC CALIBRATION")
-        cameraMatrixInit = np.array([[f,    0.0,      imsize[0]/2],
+        print(self.cameraIntrinsics)
+        if name not in self.cameraIntrinsics:
+            cameraMatrixInit = np.array([[f,    0.0,      imsize[0]/2],
                                      [0.0,     f,      imsize[1]/2],
                                      [0.0,   0.0,        1.0]])
+        else:
+            cameraMatrixInit = self.cameraIntrinsics[name]
        
         if self.traceLevel == 3 or self.traceLevel == 10:
             print(
                 f'Camera Matrix initialization with HFOV of {hfov} is.............')
             print(cameraMatrixInit)
-
-        distCoeffsInit = np.zeros((5, 1))
+        print(self.cameraDistortion)
+        if name not in self.cameraDistortion:
+            distCoeffsInit = np.zeros((5, 1))
+        else:
+            distCoeffsInit = self.cameraDistortion[name]
         print("looking for misdetected corners")
          # check if there are any suspicious corners with high reprojection error
         rvecs = []
@@ -993,35 +1027,153 @@ class StereoCalibration(object):
             rvec, tvec = self.camera_pose_charuco(objpts, corners, cameraMatrixInit, distCoeffsInit)
             tvecs.append(tvec)
             rvecs.append(rvec)
-        corners_removed, filtered_ids, filtered_corners = self.filter_corner_outliers(allIds, allCorners, cameraMatrixInit, distCoeffsInit, rvecs, tvecs)
 
         # Here we need to get initialK and parameters for each camera ready and fill them inside reconstructed reprojection error per point
-        #ret = 0.0
-        #filtered_corners, filtered_ids = self.calculate_reprojection(rvecs, tvecs, cameraMatrixInit, distCoeffsInit, ret, allCorners, allIds, camera = name)
-        if corners_removed:
-            obj_points = []
-            for i in range(len(filtered_ids)):
-                obj_points.append(self.charuco_ids_to_objpoints(filtered_ids[i]))
+        ret = 0.0
+        threshold = 10.0
         flags = cv2.CALIB_USE_INTRINSIC_GUESS
         flags += distortion_flags
 
-    #     flags = (cv2.CALIB_RATIONAL_MODEL)
-        (ret, camera_matrix, distortion_coefficients,
-         rotation_vectors, translation_vectors,
-         stdDeviationsIntrinsics, stdDeviationsExtrinsics,
-         perViewErrors) = cv2.aruco.calibrateCameraCharucoExtended(
-            charucoCorners=filtered_corners,
-            charucoIds=filtered_ids,
-            board=self.board,
-            imageSize=imsize,
-            cameraMatrix=cameraMatrixInit,
-            distCoeffs=distCoeffsInit,
-            flags=flags,
-            criteria=(cv2.TERM_CRITERIA_EPS & cv2.TERM_CRITERIA_COUNT, 50000, 1e-9))
+        #     flags = (cv2.CALIB_RATIONAL_MODEL)
+        threshold = 20
+        reprojection = []
+        removed_errors = []
+        num_corners = []
+        num_threshold = []
+        iterations_array = []
+        intrinsic_array = {"f_x": [], "f_y": [], "c_x": [],"c_y": []}
+        distortion_array = {}
+        index = 0
+        
+        fig, ax = plt.subplots()
+        camera_matrix = cameraMatrixInit
+        distortion_coefficients = distCoeffsInit
+        rotation_vectors = rvecs
+        translation_vectors = tvecs
+        translation_array_x = []
+        translation_array_y = []
+        translation_array_z = []
+        corner_checker = 0
+        previous_ids = []
+        threshold = 3
+        import time
+        try:
+            whole = time.time()
+            while True:
+                for i in range(len(distortion_coefficients)):
+                    if i not in distortion_array.keys():
+                        distortion_array[i] = []
+                    distortion_array[i].append(distortion_coefficients[i][0])
+                intrinsic_array['f_x'].append(camera_matrix[0][0])
+                intrinsic_array['f_y'].append(camera_matrix[1][1])
+                intrinsic_array['c_x'].append(camera_matrix[0][2])
+                intrinsic_array['c_y'].append(camera_matrix[1][2])
+                num_threshold.append(threshold)
+
+                translation_array_x.append(np.mean(np.array(translation_vectors).T[0][0]))
+                translation_array_y.append(np.mean(np.array(translation_vectors).T[0][1]))
+                translation_array_z.append(np.mean(np.array(translation_vectors).T[0][2]))
+
+
+                start = time.time()
+                filtered_corners, filtered_ids, all_error, removed_corners, removed_ids, removed_error = self.features_filtering_function(rotation_vectors, translation_vectors, camera_matrix, distortion_coefficients, ret, allCorners, allIds, camera = name, threshold = threshold)
+                num_corners.append(len(removed_corners))
+                iterations_array.append(index)
+                reprojection.append(ret)
+                print(f"Each filtering {time.time() - start}")
+                if self.traceLevel == 8:
+                    _, bins, _ = ax.hist(all_error, range = [0,30], bins = 100, label = f"Iteration {index}, number filtered: {len(removed_corners)}", color= plt.cm.summer(1-(index-1)/10), alpha = 0.3, edgecolor ="black")  
+                    ax.hist(removed_error, bins = bins, color= plt.cm.summer(1-(index-1)/7), alpha = 0.8, edgecolor = "black")
+                    ax.vlines(threshold, ymin = -0.5, ymax = len(all_error), color = "red")
+                start = time.time()
+                (ret, camera_matrix, distortion_coefficients,
+                 rotation_vectors, translation_vectors,
+                 stdDeviationsIntrinsics, stdDeviationsExtrinsics,
+                 perViewErrors) = cv2.aruco.calibrateCameraCharucoExtended(
+                    charucoCorners=filtered_corners,
+                    charucoIds=filtered_ids,
+                    board=self.board,
+                    imageSize=imsize,
+                    cameraMatrix=cameraMatrixInit,
+                    distCoeffs=distCoeffsInit,
+                    flags=flags,
+                    criteria=(cv2.TERM_CRITERIA_EPS & cv2.TERM_CRITERIA_COUNT, 50000, 1e-9))
+                cameraMatrixInit = camera_matrix
+                distCoeffsInit = distortion_coefficients
+                print(f"Each calibration {time.time()-start}")
+                index += 1
+                if  index > 5 or (previous_ids == removed_ids and len(previous_ids) >= len(removed_ids) and index > 2):
+                    print(f"Whole procedure: {time.time() - whole}")
+                    if self.traceLevel == 8:
+                        fig.suptitle(f"Histograms of reprojection error for threshold {threshold}")
+                        ax.legend()
+                        ax.grid()
+                        plt.show()
+                        plt.title(f"Reprojection error after {int(index) + 1} iterations, threshold {threshold}")
+                        plt.plot(iterations_array, reprojection)
+                        plt.xlabel("Iteration")
+                        plt.ylabel("Reprojection error")
+                        plt.grid()
+                        plt.show()
+                        plt.title(f"Corners rejected after {int(index) + 1} iterations, threshold {threshold}")
+                        plt.plot(iterations_array, num_corners)
+                        plt.xlabel("Iteration")
+                        plt.ylabel("Rejected corners")
+                        plt.grid()
+                        plt.show()
+                        plt.title(f"Distortion after {int(index) + 1} iterations, threshold {threshold}")
+                        for key, distortion in distortion_array.items():
+                            if distortion[0] != 0:
+                                plt.plot(iterations_array,distortion, label = f"Distortion: {key}")
+                        plt.ylabel("Absolute change")
+                        plt.grid()
+                        plt.legend()
+                        plt.show()
+                        plt.subplot(2,2,1)
+                        plt.title(f"Intrinsic and extrinsics after {int(index) + 1} iterations, threshold {threshold}")
+                        plt.plot(iterations_array, intrinsic_array['f_x'],  label = "f_x")
+                        plt.plot([],[], color = "white", label = f"Start: {round(intrinsic_array['f_x'][0], 2)}")
+                        plt.plot([],[], color = "white", label = f"Finish: {round(intrinsic_array['f_x'][len(intrinsic_array['f_x'])-1], 2)}")
+                        plt.plot(iterations_array, intrinsic_array['f_y'], label = "f_y")
+                        plt.plot([],[], color = "white", label = f"Start: {round(intrinsic_array['f_y'][0], 2)}")
+                        plt.plot([],[], color = "white", label = f"Finish: {round(intrinsic_array['f_y'][len(intrinsic_array['f_y'])-1], 2)}")
+                        plt.xlabel("Iterations")
+                        plt.ylabel("Absolute change")
+                        plt.grid()
+                        plt.legend()
+
+                        plt.subplot(2,2,2)
+                        plt.plot(iterations_array, intrinsic_array['c_x'], label = "c_x")
+                        plt.plot([],[], color = "white", label = f"Start: {round(intrinsic_array['c_x'][0], 2)}")
+                        plt.plot([],[], color = "white", label = f"Finish: {round(intrinsic_array['c_x'][len(intrinsic_array['c_x'])-1], 2)}")
+                        plt.plot(iterations_array, intrinsic_array['c_y'], label = "c_y")
+                        plt.plot([],[], color = "white", label = f"Start: {round(intrinsic_array['c_y'][0], 2)}")
+                        plt.plot([],[], color = "white", label = f"Finish: {round(intrinsic_array['c_y'][len(intrinsic_array['c_y'])-1], 2)}")
+                        plt.xlabel("Iterations")
+                        plt.ylabel("Absolute change")
+                        plt.grid()
+                        plt.legend()
+
+                        plt.subplot(2,1,2)
+                        plt.plot(iterations_array, translation_array_x - translation_array_x[0], label = "Translation x")
+                        plt.plot(iterations_array, translation_array_y - translation_array_y[0], label = "Translation y")
+                        plt.plot(iterations_array, translation_array_z - translation_array_z[0], label = "Translation z")
+                        plt.grid()
+                        plt.xlabel("Iterations")
+                        plt.ylabel("Absolute change")
+                        plt.legend()
+                        plt.show()
+                        traceLevel_copy = self.traceLevel
+                        self.traceLevel = 5
+                        filtered_corners, filtered_ids , all_error,removed_corners, removed_ids, removed_error= self.features_filtering_function(rotation_vectors, translation_vectors, camera_matrix, distortion_coefficients, ret, allCorners, allIds, camera = name, threshold = 1.0)
+                        self.traceLevel = traceLevel_copy
+                    break
+                previous_ids = removed_ids
+        except KeyboardInterrupt:
+            pass
         if self.traceLevel == 3 or self.traceLevel == 10:
             print('Per View Errors...')
             print(perViewErrors)
-
         return ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, filtered_ids, filtered_corners, allCorners, allIds
 
     def calibrate_fisheye(self, allCorners, allIds, imsize, hfov, name):
