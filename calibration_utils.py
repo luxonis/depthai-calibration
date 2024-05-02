@@ -18,7 +18,7 @@ from scipy.interpolate import griddata
 
 import matplotlib.colors as colors
 
-per_ccm = False
+per_ccm = True
 cdict = {'red':  ((0.0, 0.0, 0.0),   # no red at 0
           (0.5, 1.0, 1.0),   # all channels set to 1.0 at 0.5 to create white
           (1.0, 0.8, 0.8)),  # set to 0.8 so its not too bright at 1
@@ -441,25 +441,30 @@ class StereoCalibration(object):
     def get_distortion_flags(self,name):
         if self.distortion_model[name] == None:
             print("Use DEFAULT model")
+            model_name = "DEFAULT"
             flags = cv2.CALIB_RATIONAL_MODEL
 
         elif isinstance(self.distortion_model[name], str):
             if self.distortion_model[name] == "NORMAL":
                 print("Using NORMAL model")
+                model_name = "NORMAL"
                 flags = cv2.CALIB_RATIONAL_MODEL
 
             elif self.distortion_model[name] == "TILTED":
                 print("Using TILTED model")
+                model_name = "TILTED"
                 flags = cv2.CALIB_RATIONAL_MODEL
                 flags += cv2.CALIB_TILTED_MODEL
 
             elif self.distortion_model[name] == "PRISM":
                 print("Using PRISM model")
+                model_name = "PRISM"
                 flags = cv2.CALIB_RATIONAL_MODEL
                 flags += cv2.CALIB_TILTED_MODEL
                 flags += cv2.CALIB_THIN_PRISM_MODEL
 
             elif self.distortion_model[name] == "THERMAL":
+                model_name = "THERMAL"
                 print("Using THERMAL model")
                 flags = cv2.CALIB_RATIONAL_MODEL
                 flags += cv2.CALIB_FIX_K3
@@ -469,7 +474,7 @@ class StereoCalibration(object):
         elif isinstance(self.distortion_model[name], int):
             print("Using CUSTOM flags")
             flags = self.distortion_model[name]
-        return flags
+        return flags, model_name
 
     def calibrate_wf_intrinsics(self, name, allCorners, allIds, imsize, hfov, features, image_files):
         image_files = glob.glob(image_files + "/*")
@@ -479,7 +484,7 @@ class StereoCalibration(object):
         coverageImage = self.draw_corners(allCorners, coverageImage)
         if self.calib_model[name] == 'perspective':
             if features == None or features == "charucos":
-                distortion_flags = self.get_distortion_flags(name)
+                distortion_flags, model_name = self.get_distortion_flags(name)
                 ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, filtered_ids, filtered_corners, allCorners, allIds  = self.calibrate_camera_charuco(
                     allCorners, allIds, imsize, hfov, name, distortion_flags)
                 if self.filtering_enable or self.traceLevel != 0:
@@ -857,7 +862,7 @@ class StereoCalibration(object):
         coverageImage = cv2.cvtColor(coverageImage, cv2.COLOR_GRAY2BGR)
         coverageImage = self.draw_corners(allCorners, coverageImage)
         if self.calib_model[name] == 'perspective':
-            distortion_flags = self.get_distortion_flags(name)
+            distortion_flags, model_name = self.get_distortion_flags(name)
             ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, filtered_ids, filtered_corners, allCorners, allIds  = self.calibrate_camera_charuco(
                 allCorners, allIds, imsize, hfov, name, distortion_flags)
             if self.filtering_enable or self.traceLevel != 0:
@@ -1160,7 +1165,8 @@ class StereoCalibration(object):
                 R=r_in, T=t_in, criteria=stereocalib_criteria , flags=flags)
 
                 r_euler = Rotation.from_matrix(R).as_euler('xyz', degrees=True)
-                print(f'Epipolar error is {ret}')
+                scale = ((cameraMatrix_l[0][0]*cameraMatrix_r[0][0] + cameraMatrix_l[1][1]*cameraMatrix_r[1][1])/2)
+                print(f'Epipolar error is {ret*np.sqrt(scale)}')
                 print('Printing Extrinsics res...')
                 print(R)
                 print(T)
