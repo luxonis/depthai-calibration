@@ -1060,10 +1060,6 @@ class StereoCalibration(object):
         try:
             whole = time.time()
             while True:
-                for i in range(len(distortion_coefficients)):
-                    if i not in distortion_array.keys():
-                        distortion_array[i] = []
-                    distortion_array[i].append(distortion_coefficients[i][0])
                 intrinsic_array['f_x'].append(camera_matrix[0][0])
                 intrinsic_array['f_y'].append(camera_matrix[1][1])
                 intrinsic_array['c_x'].append(camera_matrix[0][2])
@@ -1080,6 +1076,10 @@ class StereoCalibration(object):
                 num_corners.append(len(removed_corners))
                 iterations_array.append(index)
                 reprojection.append(ret)
+                for i in range(len(distortion_coefficients)):
+                    if i not in distortion_array.keys():
+                        distortion_array[i] = []
+                    distortion_array[i].append(distortion_coefficients[i][0])
                 print(f"Each filtering {time.time() - start}")
                 if self.traceLevel == 8:
                     _, bins, _ = ax.hist(all_error, range = [0,30], bins = 100, label = f"Iteration {index}, number filtered: {len(removed_corners)}", color= plt.cm.summer(1-(index-1)/10), alpha = 0.3, edgecolor ="black")  
