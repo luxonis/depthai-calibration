@@ -186,6 +186,8 @@ class StereoCalibration(object):
         # parameters = aruco.DetectorParameters_create()
         combinedCoverageImage = None
         resizeWidth, resizeHeight = 1280, 800
+        self.height = {}
+        self.width = {}
         assert mrk_size != None,  "ERROR: marker size not set"
         for camera in board_config['cameras'].keys():
             cam_info = board_config['cameras'][camera]
@@ -195,12 +197,12 @@ class StereoCalibration(object):
                 image_files.sort()
                 for im in image_files:
                     frame = cv2.imread(im)
-                    self.height, self.width, _ = 1280, 800, 0
-                    widthRatio = resizeWidth / self.width
-                    heightRatio = resizeHeight / self.height
+                    self.height[cam_info["name"]], self.width[cam_info["name"]], _ = frame.shape
+                    widthRatio = resizeWidth / self.width[cam_info["name"]]
+                    heightRatio = resizeHeight / self.height[cam_info["name"]]
                     if (widthRatio > 0.8 and heightRatio > 0.8 and widthRatio <= 1.0 and heightRatio <= 1.0) or (widthRatio > 1.2 and heightRatio > 1.2) or (resizeHeight == 0):
-                        resizeWidth = self.width
-                        resizeHeight = self.height
+                        resizeWidth = self.width[cam_info["name"]]
+                        resizeHeight = self.height[cam_info["name"]]
                     break
         for camera in board_config['cameras'].keys():
             cam_info = board_config['cameras'][camera]
@@ -224,6 +226,7 @@ class StereoCalibration(object):
                 self.img_path.sort()
                 if per_ccm:
                     all_features, all_ids, imsize = self.getting_features(images_path, cam_info["name"], features=features)
+                    print(imsize)
                     cam_info["imsize"] = imsize
 
                     f = imsize[0] / (2 * np.tan(np.deg2rad(cam_info["hfov"]/2)))
@@ -401,7 +404,7 @@ class StereoCalibration(object):
                 ids, charucos = charuco_img
                 allCorners.append(charucos)
                 allIds.append(ids)
-            imsize = (self.height, self.width)
+            imsize = (self.height[name], self.width[name])
             return allCorners, allIds, imsize
 
         elif features == None or features == "charucos":
@@ -430,7 +433,7 @@ class StereoCalibration(object):
 
         # Here we need to get initialK and parameters for each camera ready and fill them inside reconstructed reprojection error per point
         ret = 0.0
-        threshold = 10.0
+        threshold = 50.0
 
         filtered_corners, filtered_ids,all_error, removed_corners, removed_ids, removed_error = self.features_filtering_function(rvecs, tvecs, cameraMatrixInit, distCoeffsInit, ret, allCorners, allIds, camera = name, threshold = threshold)
         return removed_corners, filtered_corners, filtered_ids
@@ -590,7 +593,7 @@ class StereoCalibration(object):
             total_error_squared = 0
             total_points = 0
 
-            if self.traceLevel == 5 or self.traceLevel == 10:
+            if self.traceLevel == 8 or self.traceLevel == 10:
                 centroid_x = np.mean(np.array(display_corners).T[0])
                 centroid_y = np.mean(np.array(display_corners).T[1])
 
@@ -611,14 +614,14 @@ class StereoCalibration(object):
                 cbar = plt.colorbar(img, ax=ax)
                 cbar.set_label("Reprojection error")
                 ax.set_xlabel('Width')
-                ax.set_xlim([0,self.width])
-                ax.set_ylim([0,self.height])
+                ax.set_xlim([0,self.width[camera]])
+                ax.set_ylim([0,self.height[camera]])
                 ax.legend()
                 ax.set_ylabel('Y coordinate')
                 plt.grid()
                 plt.show()
 
-            if self.traceLevel == 5 or self.traceLevel == 10:
+            if self.traceLevel == 9 or self.traceLevel == 10:
                 centroid_x = np.mean(np.array(removed_corners).T[0])
                 centroid_y = np.mean(np.array(removed_corners).T[1])
 
@@ -639,15 +642,15 @@ class StereoCalibration(object):
                 cbar = plt.colorbar(img, ax=ax)
                 cbar.set_label("Reprojection error")
                 ax.set_xlabel('Width')
-                ax.set_xlim([0,self.width])
-                ax.set_ylim([0,self.height])
+                ax.set_xlim([0,self.width[camera]])
+                ax.set_ylim([0,self.height[camera]])
                 ax.legend()
                 ax.set_ylabel('Y coordinate')
                 plt.grid()
                 plt.show()
 
         if self.traceLevel == 3 or self.traceLevel == 5 or self.traceLevel == 10:
-            center_x, center_y = self.width / 2, self.height / 2
+            center_x, center_y = self.width[camera] / 2, self.height[camera] / 2
             distances = [distance((center_x, center_y), point) for point in np.array(display_corners)]
             max_distance = max(distances)
             circle = plt.Circle((center_x, center_y), max_distance, color='black', fill=True, label = "Calibrated area", alpha = 0.2)
@@ -662,8 +665,8 @@ class StereoCalibration(object):
             cbar = plt.colorbar(img, ax=ax)
             cbar.set_label("Reprojection error")
             ax.set_xlabel('Width')
-            ax.set_xlim([0,self.width])
-            ax.set_ylim([0,self.height])
+            ax.set_xlim([0,self.width[camera]])
+            ax.set_ylim([0,self.height[camera]])
             ax.legend()
             ax.set_ylabel('Height')
             plt.grid()
@@ -697,13 +700,13 @@ class StereoCalibration(object):
             plt.colorbar(label='Reprojection error')
             contours = plt.contour(grid_x, grid_y, grid_z, 7, colors ="black", alpha = 0.7, linewidths = 0.5, linestyles = "dashed")
             plt.clabel(contours, inline=True, fontsize=8)
-            plt.xlim([0,self.width])
-            plt.ylim([0,self.height])
+            plt.xlim([0,self.width[camera]])
+            plt.ylim([0,self.height[camera]])
             plt.grid()
             plt.show()
 
         if self.traceLevel == 11:
-            sorted_points, quadrant_coords = sort_points_into_quadrants(display_points, self.width, self.height, error=all_error)
+            sorted_points, quadrant_coords = sort_points_into_quadrants(display_points, self.width[camera], self.height[camera], error=all_error)
             quadrant_width = self.width // nx
             quadrant_height = self.height // ny
 
@@ -728,7 +731,6 @@ class StereoCalibration(object):
                         green = 0 
                     else:
                         count = round(count, 4)
-                        threshold = 1
                         red = int(((count / threshold)) * 255)
                         green = int((1 -count / threshold) * 255)
                     color = (0, green, red)
@@ -883,7 +885,7 @@ class StereoCalibration(object):
                 ids, charucos = charuco_img
                 allCorners.append(charucos)
                 allIds.append(ids)
-            imsize = (self.height, self.width)
+            imsize = (self.height[name], self.width[name])
 
         coverageImage = np.ones(imsize[::-1], np.uint8) * 255
         coverageImage = cv2.cvtColor(coverageImage, cv2.COLOR_GRAY2BGR)
@@ -1030,12 +1032,11 @@ class StereoCalibration(object):
 
         # Here we need to get initialK and parameters for each camera ready and fill them inside reconstructed reprojection error per point
         ret = 0.0
-        threshold = 10.0
+        threshold = 50.0
         flags = cv2.CALIB_USE_INTRINSIC_GUESS
         flags += distortion_flags
 
         #     flags = (cv2.CALIB_RATIONAL_MODEL)
-        threshold = 20
         reprojection = []
         removed_errors = []
         num_corners = []
@@ -1055,7 +1056,6 @@ class StereoCalibration(object):
         translation_array_z = []
         corner_checker = 0
         previous_ids = []
-        threshold = 3
         import time
         try:
             whole = time.time()
@@ -1100,6 +1100,7 @@ class StereoCalibration(object):
                     criteria=(cv2.TERM_CRITERIA_EPS & cv2.TERM_CRITERIA_COUNT, 50000, 1e-9))
                 cameraMatrixInit = camera_matrix
                 distCoeffsInit = distortion_coefficients
+                threshold = 10
                 print(f"Each calibration {time.time()-start}")
                 index += 1
                 if  index > 5 or (previous_ids == removed_ids and len(previous_ids) >= len(removed_ids) and index > 2):
