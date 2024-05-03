@@ -195,7 +195,7 @@ class StereoCalibration(object):
                 image_files.sort()
                 for im in image_files:
                     frame = cv2.imread(im)
-                    self.height, self.width, _ = 1280, 800, 0
+                    self.height, self.width, _ = frame.shape
                     widthRatio = resizeWidth / self.width
                     heightRatio = resizeHeight / self.height
                     if (widthRatio > 0.8 and heightRatio > 0.8 and widthRatio <= 1.0 and heightRatio <= 1.0) or (widthRatio > 1.2 and heightRatio > 1.2) or (resizeHeight == 0):
@@ -430,8 +430,7 @@ class StereoCalibration(object):
 
         # Here we need to get initialK and parameters for each camera ready and fill them inside reconstructed reprojection error per point
         ret = 0.0
-        threshold = 10.0
-
+        threshold = 50.0
         filtered_corners, filtered_ids,all_error, removed_corners, removed_ids, removed_error = self.features_filtering_function(rvecs, tvecs, cameraMatrixInit, distCoeffsInit, ret, allCorners, allIds, camera = name, threshold = threshold)
         return removed_corners, filtered_corners, filtered_ids
     
@@ -618,7 +617,9 @@ class StereoCalibration(object):
                 plt.grid()
                 plt.show()
 
-            if self.traceLevel == 5 or self.traceLevel == 10:
+            if self.traceLevel == 9 or self.traceLevel == 10:
+                if len(removed_corners) < 2:
+                    continue
                 centroid_x = np.mean(np.array(removed_corners).T[0])
                 centroid_y = np.mean(np.array(removed_corners).T[1])
 
@@ -728,7 +729,6 @@ class StereoCalibration(object):
                         green = 0 
                     else:
                         count = round(count, 4)
-                        threshold = 1
                         red = int(((count / threshold)) * 255)
                         green = int((1 -count / threshold) * 255)
                     color = (0, green, red)
@@ -1030,12 +1030,10 @@ class StereoCalibration(object):
 
         # Here we need to get initialK and parameters for each camera ready and fill them inside reconstructed reprojection error per point
         ret = 0.0
-        threshold = 10.0
         flags = cv2.CALIB_USE_INTRINSIC_GUESS
         flags += distortion_flags
 
         #     flags = (cv2.CALIB_RATIONAL_MODEL)
-        threshold = 20
         reprojection = []
         removed_errors = []
         num_corners = []
@@ -1055,7 +1053,7 @@ class StereoCalibration(object):
         translation_array_z = []
         corner_checker = 0
         previous_ids = []
-        threshold = 3
+        threshold = 10
         import time
         try:
             whole = time.time()
@@ -1122,9 +1120,9 @@ class StereoCalibration(object):
                         plt.grid()
                         plt.show()
                         plt.title(f"Distortion after {int(index) + 1} iterations, threshold {threshold}")
-                        for key, distortion in distortion_array.items():
+                        """for key, distortion in distortion_array.items():
                             if distortion[0] != 0:
-                                plt.plot(iterations_array,distortion, label = f"Distortion: {key}")
+                                plt.plot(iterations_array,distortion, label = f"Distortion: {key}")"""
                         plt.ylabel("Absolute change")
                         plt.grid()
                         plt.legend()
