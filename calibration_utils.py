@@ -9,6 +9,9 @@ from scipy.spatial.transform import Rotation
 import time
 import json
 import cv2.aruco as aruco
+import logging
+logging.getLogger('matplotlib').setLevel(logging.WARNING)
+
 from pathlib import Path
 from functools import reduce
 from collections import deque
