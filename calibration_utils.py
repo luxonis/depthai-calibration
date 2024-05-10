@@ -192,8 +192,6 @@ class StereoCalibration(object):
         resizeWidth, resizeHeight = 1280, 800
         self.height = {}
         self.width = {}
-        self.height = {}
-        self.width = {}
         assert mrk_size != None,  "ERROR: marker size not set"
         for camera in board_config['cameras'].keys():
             cam_info = board_config['cameras'][camera]
@@ -553,7 +551,8 @@ class StereoCalibration(object):
         # Draw the line on the image
         cv2.line(displayframe, start_point, end_point, color, thickness)
         return displayframe
-    def features_filtering_function(self,rvecs, tvecs, cameraMatrix, distCoeffs, reprojection, filtered_corners,filtered_id, camera, display = True, threshold = 1.0, draw_quadrants = False, nx = 4, ny = 4):
+
+    def features_filtering_function(self,rvecs, tvecs, cameraMatrix, distCoeffs, reprojection, filtered_corners,filtered_id, camera, display = True, threshold = None, draw_quadrants = False, nx = 4, ny = 4):
         whole_error = []
         all_points = []
         all_corners = []
@@ -610,7 +609,7 @@ class StereoCalibration(object):
             total_error_squared = 0
             total_points = 0
 
-            if self.traceLevel == 7 or self.traceLevel == 10:
+            if self.traceLevel == 8 or self.traceLevel == 10:
                 centroid_x = np.mean(np.array(display_corners).T[0])
                 centroid_y = np.mean(np.array(display_corners).T[1])
 
@@ -638,11 +637,12 @@ class StereoCalibration(object):
                 plt.grid()
                 plt.show()
 
-            if self.traceLevel == 8 or self.traceLevel == 10:
+            if self.traceLevel == 9:
                 centroid_x = np.mean(np.array(removed_corners).T[0])
                 centroid_y = np.mean(np.array(removed_corners).T[1])
-
                 # Calculate distances from the center
+                if len(corners2[removed_mask]) > 2:
+                    continue
                 distances = [distance((centroid_x, centroid_y), point) for point in np.array(corners2[removed_mask])]
                 max_distance = max(distances)
                 if max_distance > circle_size:
@@ -781,7 +781,7 @@ class StereoCalibration(object):
             return None
 
     def camera_pose_charuco(self, objpoints: np.array, corners: np.array, K: np.array, d: np.array):
-        ret, rvec, tvec = cv2.solvePnP(objpoints, corners, K, d)
+        ret, rvec, tvec, _ = cv2.solvePnPRansac(objectPoints=objpoints, imagePoints=corners, cameraMatrix=K, distCoeffs=d)
         if ret:
             return rvec, tvec
         else:
@@ -1119,7 +1119,7 @@ class StereoCalibration(object):
                 index += 1
                 if  index > 5 or (previous_ids == removed_ids and len(previous_ids) >= len(removed_ids) and index > 2):
                     print(f"Whole procedure: {time.time() - whole}")
-                    if self.traceLevel == 9:
+                    if self.traceLevel == 12 or self.traceLevel == 10:
                         fig.suptitle(f"Histograms of reprojection error for threshold {threshold}")
                         ax.legend()
                         ax.grid()
@@ -1137,9 +1137,9 @@ class StereoCalibration(object):
                         plt.grid()
                         plt.show()
                         plt.title(f"Distortion after {int(index) + 1} iterations, threshold {threshold}")
-                        for key, distortion in distortion_array.items():
+                        """for key, distortion in distortion_array.items():
                             if distortion[0] != 0:
-                                plt.plot(iterations_array,distortion, label = f"Distortion: {key}")
+                                plt.plot(iterations_array,distortion, label = f"Distortion: {key}")"""
                         plt.ylabel("Absolute change")
                         plt.grid()
                         plt.legend()
@@ -1179,7 +1179,7 @@ class StereoCalibration(object):
                         plt.legend()
                         plt.show()
                         traceLevel_copy = self.traceLevel
-                        self.traceLevel = 5
+                        self.traceLevel = 8
                         filtered_corners, filtered_ids , all_error,removed_corners, removed_ids, removed_error= self.features_filtering_function(rotation_vectors, translation_vectors, camera_matrix, distortion_coefficients, ret, allCorners, allIds, camera = name, threshold = 1.0)
                         self.traceLevel = traceLevel_copy
                     break
@@ -1322,7 +1322,6 @@ class StereoCalibration(object):
                     #left_corners_sampled[i] = cv2.fisheye.undistortPoints(np.array(left_corners_sampled[i]), cameraMatrix_l, None)
             for i in range(len(right_corners_sampled)):
                 if self.calib_model[right_name] == "perspective":
-                    print("Undistorting as perspective")
                     right_corners_sampled[i] = cv2.undistortPoints(np.array(right_corners_sampled[i]), cameraMatrix_r, distCoeff_r, P=cameraMatrix_r)
                     #right_corners_sampled[i] = cv2.undistortPoints(np.array(right_corners_sampled[i]), cameraMatrix_r, None)
                 else:
@@ -1333,7 +1332,7 @@ class StereoCalibration(object):
                 flags = cv2.CALIB_FIX_INTRINSIC
                 ret, M1, d1, M2, d2, R, T, E, F, _ = cv2.stereoCalibrateExtended(
                 obj_pts, left_corners_sampled, right_corners_sampled,
-                cameraMatrix_l, np.zeros(12), cameraMatrix_r, np.zeros(12), None,
+                np.eye(3), np.zeros(12), np.eye(3), np.zeros(12), None,
                 R=r_in, T=t_in, criteria=stereocalib_criteria , flags=flags)
 
                 r_euler = Rotation.from_matrix(R).as_euler('xyz', degrees=True)
