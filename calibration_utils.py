@@ -17,7 +17,8 @@ import matplotlib.pyplot as plt
 from scipy.interpolate import griddata
 
 import matplotlib.colors as colors
-
+import logging
+logging.getLogger('matplotlib').setLevel(logging.WARNING)
 per_ccm = True
 extrinsic_per_ccm = False
 cdict = {'red':  ((0.0, 0.0, 0.0),   # no red at 0
@@ -139,7 +140,7 @@ def polygon_from_image_name(image_name):
 class StereoCalibration(object):
     """Class to Calculate Calibration and Rectify a Stereo Camera."""
 
-    def __init__(self, traceLevel: float = 1.0, outputScaleFactor: float = 0.5, disableCamera: list = [], model = None,distortion_model = {}, filtering_enable = False):
+    def __init__(self, traceLevel: float = 1.0, outputScaleFactor: float = 0.5, disableCamera: list = [], model = None,distortion_model = {}, filtering_enable = False, initial_max_threshold = 15, initial_min_filtered = 0.05, calibration_max_threshold = 10):
         self.filtering_enable = filtering_enable
         self.ccm_model = distortion_model
         self.model = model
@@ -147,6 +148,10 @@ class StereoCalibration(object):
         self.output_scale_factor = outputScaleFactor
         self.disableCamera = disableCamera
         self.errors = {}
+        self.initial_max_threshold = initial_max_threshold
+        self.initial_min_filtered = initial_min_filtered
+        self.calibration_max_threshold = calibration_max_threshold
+        self.calibration_min_filtered = initial_min_filtered
 
         """Class to Calculate Calibration and Rectify a Stereo Camera."""
 
@@ -184,6 +189,7 @@ class StereoCalibration(object):
             mrk_size,
             self.aruco_dictionary)
 
+        self.cams = []
         # parameters = aruco.DetectorParameters_create()
         combinedCoverageImage = None
         resizeWidth, resizeHeight = 1280, 800
@@ -225,6 +231,8 @@ class StereoCalibration(object):
                 features = None
                 self.img_path = glob.glob(images_path + "/*")
                 self.img_path.sort()
+                cam_info["img_path"] = self.img_path
+                self.name = cam_info["name"]
                 if per_ccm:
                     all_features, all_ids, imsize = self.getting_features(images_path, cam_info["name"], features=features)
                     cam_info["imsize"] = imsize
@@ -331,7 +339,7 @@ class StereoCalibration(object):
                                 [specTranslation['x'], specTranslation['y'], specTranslation['z']], dtype=np.float32)
                             rotation = Rotation.from_euler(
                                 'xyz', [rot['r'], rot['p'], rot['y']], degrees=True).as_matrix().astype(np.float32)
-                            if per_ccm:
+                            if per_ccm and extrinsic_per_ccm:
                                 if left_cam_info["name"] in self.extrinsic_img or right_cam_info["name"] in self.extrinsic_img:
                                     if left_cam_info["name"] in self.extrinsic_img:
                                         array = self.extrinsic_img[left_cam_info["name"]]
@@ -425,11 +433,17 @@ class StereoCalibration(object):
          # check if there are any suspicious corners with high reprojection error
         rvecs = []
         tvecs = []
+        index = 0
+        self.index = 0
+        max_threshold = 75 + self.initial_max_threshold * (hfov / 30 + imsize[1] / 800 * 0.2)
+        min_inlier = 1 - self.initial_min_filtered * (hfov / 60 + imsize[1] / 800 * 0.2)
         for corners, ids in zip(allCorners, allIds):
+            self.index = index
             objpts = self.charuco_ids_to_objpoints(ids)
-            rvec, tvec = self.camera_pose_charuco(objpts, corners, cameraMatrixInit, distCoeffsInit)
+            rvec, tvec, newids = self.camera_pose_charuco(objpts, corners, ids, cameraMatrixInit, distCoeffsInit, max_threshold = max_threshold, min_inliers=min_inlier, ini_threshold= 10)
             tvecs.append(tvec)
             rvecs.append(rvec)
+            index += 1
 
         # Here we need to get initialK and parameters for each camera ready and fill them inside reconstructed reprojection error per point
         ret = 0.0
@@ -606,7 +620,7 @@ class StereoCalibration(object):
             total_error_squared = 0
             total_points = 0
 
-            if self.traceLevel == 7 or self.traceLevel == 10:
+            if self.traceLevel == 8 or self.traceLevel == 10:
                 centroid_x = np.mean(np.array(display_corners).T[0])
                 centroid_y = np.mean(np.array(display_corners).T[1])
 
@@ -634,7 +648,7 @@ class StereoCalibration(object):
                 plt.grid()
                 plt.show()
 
-            if self.traceLevel == 8 or self.traceLevel == 10:
+            if self.traceLevel == 9 or self.traceLevel == 10:
                 centroid_x = np.mean(np.array(removed_corners).T[0])
                 centroid_y = np.mean(np.array(removed_corners).T[1])
 
@@ -776,10 +790,39 @@ class StereoCalibration(object):
         else:
             return None
 
-    def camera_pose_charuco(self, objpoints: np.array, corners: np.array, K: np.array, d: np.array):
-        ret, rvec, tvec = cv2.solvePnP(objpoints, corners, K, d)
+    def camera_pose_charuco(self, objpoints: np.array, corners: np.array, ids: np.array, K: np.array, d: np.array, ini_threshold = 2, min_inliers = 0.95, threshold_stepper = 1, max_threshold = 50):
+        image = cv2.imread(self.img_path[self.index])
+        objects = []
+        all_objects = []
+        index = 0
+        start_time = time.time()
+        while len(objects) < len(objpoints[:,0,0]) * min_inliers:
+            if ini_threshold > max_threshold:
+                break
+            ret, rvec, tvec, objects  = cv2.solvePnPRansac(objpoints, corners, K, d, reprojectionError = ini_threshold, flags = cv2.SOLVEPNP_P3P,  iterationsCount = 10000, confidence = 0.9)
+            all_objects.append(objects)
+            imgpoints2 = objpoints.copy()
+
+            all_corners = corners.copy()
+            all_corners = np.array([all_corners[id[0]-1] for id in objects])
+            imgpoints2 = np.array([imgpoints2[id[0]-1] for id in objects])
+
+            ret, rvec, tvec = cv2.solvePnP(imgpoints2, all_corners, K, d)
+            imgpoints2, _ = cv2.projectPoints(imgpoints2, rvec, tvec, self.cameraIntrinsics[self.name], self.cameraDistortion[self.name])
+            
+            ini_threshold += threshold_stepper
+            index += 1
+        if self.traceLevel == 13:
+            plt.title(f"Number of rejected corners in filtering, iterations needed: {ini_threshold}, inliers: {round(len(objects)/len(corners[:,0,0]), 4) *100} %")
+            plt.imshow(image)
+            plt.scatter(corners[:,0,0],corners[:,0,1], marker= "o", label = f"Detected all corners: {len(corners[:,0,0])}", color = "Red")
+            plt.scatter(imgpoints2[:,0,0],imgpoints2[:,0,1], label = f"Filtering method: {len(objects)}", marker = "x", color = "Green")
+            plt.legend()
+            plt.show()
+        corners = all_corners
+        objects = imgpoints2
         if ret:
-            return rvec, tvec
+            return rvec, tvec, objpoints
         else:
             return None
         
@@ -1035,11 +1078,17 @@ class StereoCalibration(object):
          # check if there are any suspicious corners with high reprojection error
         rvecs = []
         tvecs = []
+        self.index = 0
+        index = 0
+        max_threshold = 10 + self.initial_max_threshold * (hfov / 30 + imsize[1] / 800 * 0.2)
+        min_inlier = 1 - self.initial_min_filtered * (hfov / 60 + imsize[1] / 800 * 0.2)
         for corners, ids in zip(allCorners, allIds):
+            self.index = index
             objpts = self.charuco_ids_to_objpoints(ids)
-            rvec, tvec = self.camera_pose_charuco(objpts, corners, cameraMatrixInit, distCoeffsInit)
+            rvec, tvec, newids = self.camera_pose_charuco(objpts, corners, ids, cameraMatrixInit, distCoeffsInit)
             tvecs.append(tvec)
             rvecs.append(rvec)
+            index += 1
 
         # Here we need to get initialK and parameters for each camera ready and fill them inside reconstructed reprojection error per point
         ret = 0.0
@@ -1091,7 +1140,7 @@ class StereoCalibration(object):
                         distortion_array[i] = []
                     distortion_array[i].append(distortion_coefficients[i][0])
                 print(f"Each filtering {time.time() - start}")
-                if self.traceLevel == 8:
+                if self.traceLevel == 12:
                     _, bins, _ = ax.hist(all_error, range = [0,30], bins = 100, label = f"Iteration {index}, number filtered: {len(removed_corners)}", color= plt.cm.summer(1-(index-1)/10), alpha = 0.3, edgecolor ="black")  
                     ax.hist(removed_error, bins = bins, color= plt.cm.summer(1-(index-1)/7), alpha = 0.8, edgecolor = "black")
                     ax.vlines(threshold, ymin = -0.5, ymax = len(all_error), color = "red")
@@ -1115,7 +1164,7 @@ class StereoCalibration(object):
                 index += 1
                 if  index > 5 or (previous_ids == removed_ids and len(previous_ids) >= len(removed_ids) and index > 2):
                     print(f"Whole procedure: {time.time() - whole}")
-                    if self.traceLevel == 9:
+                    if self.traceLevel == 12:
                         fig.suptitle(f"Histograms of reprojection error for threshold {threshold}")
                         ax.legend()
                         ax.grid()
@@ -1175,7 +1224,7 @@ class StereoCalibration(object):
                         plt.legend()
                         plt.show()
                         traceLevel_copy = self.traceLevel
-                        self.traceLevel = 5
+                        self.traceLevel = 8
                         filtered_corners, filtered_ids , all_error,removed_corners, removed_ids, removed_error= self.features_filtering_function(rotation_vectors, translation_vectors, camera_matrix, distortion_coefficients, ret, allCorners, allIds, camera = name, threshold = 1.0)
                         self.traceLevel = traceLevel_copy
                     break
@@ -1205,7 +1254,7 @@ class StereoCalibration(object):
         for corners, ids in zip(allCorners, allIds):
             objpts = self.charuco_ids_to_objpoints(ids)
             corners_undist = cv2.fisheye.undistortPoints(corners, cameraMatrixInit, distCoeffsInit)
-            rvec, tvec = self.camera_pose_charuco(objpts, corners_undist, np.eye(3), np.array((0.0,0,0,0)))
+            rvec, tvec, new_ids = self.camera_pose_charuco(objpts, corners_undist, np.eye(3), np.array((0.0,0,0,0)))
             tvecs.append(tvec)
             rvecs.append(rvec)
         corners_removed, filtered_ids, filtered_corners = self.filter_corner_outliers(allIds, allCorners, cameraMatrixInit, distCoeffsInit, rvecs, tvecs)
@@ -1318,7 +1367,6 @@ class StereoCalibration(object):
                     #left_corners_sampled[i] = cv2.fisheye.undistortPoints(np.array(left_corners_sampled[i]), cameraMatrix_l, None)
             for i in range(len(right_corners_sampled)):
                 if self.calib_model[right_name] == "perspective":
-                    print("Undistorting as perspective")
                     right_corners_sampled[i] = cv2.undistortPoints(np.array(right_corners_sampled[i]), cameraMatrix_r, distCoeff_r, P=cameraMatrix_r)
                     #right_corners_sampled[i] = cv2.undistortPoints(np.array(right_corners_sampled[i]), cameraMatrix_r, None)
                 else:
@@ -1329,7 +1377,7 @@ class StereoCalibration(object):
                 flags = cv2.CALIB_FIX_INTRINSIC
                 ret, M1, d1, M2, d2, R, T, E, F, _ = cv2.stereoCalibrateExtended(
                 obj_pts, left_corners_sampled, right_corners_sampled,
-                cameraMatrix_l, np.zeros(12), cameraMatrix_r, np.zeros(12), None,
+                np.eye(3), np.zeros(12), np.eye(3), np.zeros(12), None,
                 R=r_in, T=t_in, criteria=stereocalib_criteria , flags=flags)
 
                 r_euler = Rotation.from_matrix(R).as_euler('xyz', degrees=True)
