@@ -804,8 +804,8 @@ class StereoCalibration(object):
             imgpoints2 = objpoints.copy()
 
             all_corners = corners.copy()
-            all_corners = np.array([all_corners[id[0]-1] for id in objects])
-            imgpoints2 = np.array([imgpoints2[id[0]-1] for id in objects])
+            all_corners = np.array([all_corners[id[0]] for id in objects])
+            imgpoints2 = np.array([imgpoints2[id[0]] for id in objects])
 
             ret, rvec, tvec = cv2.solvePnP(imgpoints2, all_corners, K, d)
             imgpoints2, _ = cv2.projectPoints(imgpoints2, rvec, tvec, self.cameraIntrinsics[self.name], self.cameraDistortion[self.name])
