@@ -15,7 +15,7 @@ from collections import deque
 from typing import Optional
 import matplotlib.pyplot as plt
 from scipy.interpolate import griddata
-
+plt.rcParams.update({'font.size': 16})
 import matplotlib.colors as colors
 import logging
 logging.getLogger('matplotlib').setLevel(logging.WARNING)
@@ -440,7 +440,9 @@ class StereoCalibration(object):
         for corners, ids in zip(allCorners, allIds):
             self.index = index
             objpts = self.charuco_ids_to_objpoints(ids)
-            rvec, tvec, newids = self.camera_pose_charuco(objpts, corners, ids, cameraMatrixInit, distCoeffsInit, max_threshold = max_threshold, min_inliers=min_inlier, ini_threshold= 10)
+            rvec, tvec, newids = self.camera_pose_charuco(objpts, corners, ids, cameraMatrixInit, distCoeffsInit, max_threshold = max_threshold, min_inliers=min_inlier, ini_threshold = 5)
+            #allCorners[index] = np.array([corners[id[0]-1] for id in newids])
+            #allIds[index] = np.array([ids[id[0]-1] for id in newids])
             tvecs.append(tvec)
             rvecs.append(rvec)
             index += 1
@@ -490,6 +492,7 @@ class StereoCalibration(object):
             if self.distortion_model[name] == "NORMAL":
                 print("Using NORMAL model")
                 flags = cv2.CALIB_RATIONAL_MODEL
+                flags += cv2.CALIB_TILTED_MODEL
 
             elif self.distortion_model[name] == "TILTED":
                 print("Using TILTED model")
@@ -588,7 +591,7 @@ class StereoCalibration(object):
 
                 errors = np.linalg.norm(corners2 - imgpoints2, axis=1)
                 if threshold == None:
-                    threshold = max(2*np.median(errors), 100)
+                    threshold = max(2*np.median(errors), 150)
                 valid_mask = errors <= threshold
                 removed_mask = ~valid_mask
 
@@ -799,7 +802,7 @@ class StereoCalibration(object):
         while len(objects) < len(objpoints[:,0,0]) * min_inliers:
             if ini_threshold > max_threshold:
                 break
-            ret, rvec, tvec, objects  = cv2.solvePnPRansac(objpoints, corners, K, d, reprojectionError = ini_threshold, flags = cv2.SOLVEPNP_P3P,  iterationsCount = 10000, confidence = 0.9)
+            ret, rvec, tvec, objects  = cv2.solvePnPRansac(objpoints, corners, K, d, flags = cv2.SOLVEPNP_P3P, reprojectionError = ini_threshold,  iterationsCount = 10000, confidence = 0.9)
             all_objects.append(objects)
             imgpoints2 = objpoints.copy()
 
@@ -819,10 +822,8 @@ class StereoCalibration(object):
             plt.scatter(imgpoints2[:,0,0],imgpoints2[:,0,1], label = f"Filtering method: {len(objects)}", marker = "x", color = "Green")
             plt.legend()
             plt.show()
-        corners = all_corners
-        objects = imgpoints2
         if ret:
-            return rvec, tvec, objpoints
+            return rvec, tvec, objects
         else:
             return None
         
