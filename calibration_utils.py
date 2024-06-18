@@ -902,7 +902,7 @@ class StereoCalibration(object):
 
             if charuco_corners is not None and charuco_ids is not None and len(charuco_corners) > 3:
 
-                cv2.cornerSubPix(gray, charuco_corners,
+                charuco_corners = cv2.cornerSubPix(gray, charuco_corners,
                                     winSize=(5, 5),
                                     zeroZone=(-1, -1),
                                     criteria=criteria)
