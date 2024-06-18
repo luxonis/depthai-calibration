@@ -233,7 +233,10 @@ class StereoCalibration(object):
 
                 features = None
                 self.img_path = glob.glob(images_path + "/*")
-                self.img_path.sort()
+                if charucos != {}:
+                    self.img_path = sorted(self.img_path, key=lambda x: int(x.split('_')[1]))
+                else:
+                    self.img_path.sort()
                 cam_info["img_path"] = self.img_path
                 self.name = cam_info["name"]
                 if per_ccm:
@@ -415,7 +418,7 @@ class StereoCalibration(object):
                 ids, charucos = charuco_img
                 allCorners.append(charucos)
                 allIds.append(ids)
-            imsize = (self.height[name], self.width[name])
+            imsize = (self.width[name], self.height[name])
             return allCorners, allIds, imsize
 
         elif features == None or features == "charucos":
@@ -797,7 +800,6 @@ class StereoCalibration(object):
             return None
 
     def camera_pose_charuco(self, objpoints: np.array, corners: np.array, ids: np.array, K: np.array, d: np.array, ini_threshold = 2, min_inliers = 0.95, threshold_stepper = 1, max_threshold = 50):
-        image = cv2.imread(self.img_path[self.index])
         objects = []
         all_objects = []
         index = 0
@@ -819,6 +821,7 @@ class StereoCalibration(object):
             ini_threshold += threshold_stepper
             index += 1
         if self.traceLevel == 13:
+            image = cv2.imread(self.img_path[self.index])
             plt.title(f"Number of rejected corners in filtering, iterations needed: {ini_threshold}, inliers: {round(len(objects)/len(corners[:,0,0]), 4) *100} %")
             plt.imshow(image)
             plt.scatter(corners[:,0,0],corners[:,0,1], marker= "o", label = f"Detected all corners: {len(corners[:,0,0])}", color = "Red")
@@ -902,7 +905,7 @@ class StereoCalibration(object):
 
             if charuco_corners is not None and charuco_ids is not None and len(charuco_corners) > 3:
 
-                cv2.cornerSubPix(gray, charuco_corners,
+                charuco_corners = cv2.cornerSubPix(gray, charuco_corners,
                                     winSize=(5, 5),
                                     zeroZone=(-1, -1),
                                     criteria=criteria)
@@ -1424,6 +1427,7 @@ class StereoCalibration(object):
                 elif isinstance(self.model, str):
                     if self.model == "NORMAL":
                         flags += cv2.CALIB_RATIONAL_MODEL
+                        flags += cv2.CALIB_TILTED_MODEL
                     if self.model == "TILTED":
                         flags += cv2.CALIB_RATIONAL_MODEL 
                         flags += cv2.CALIB_TILTED_MODEL
