@@ -228,7 +228,10 @@ class StereoCalibration(object):
                     self.distortion_model[cam_info["name"]] = self.model_ccm
                 else:
                     self.calib_model[cam_info["name"]] = self.cameraModel
-                    self.distortion_model[cam_info["name"]] = self.model
+                    if cam_info["name"] in self.ccm_model:
+                        self.distortion_model[cam_info["name"]] = self.ccm_model[cam_info["name"]]
+                    else:
+                        self.distortion_model[cam_info["name"]] = self.model
 
 
                 features = None
@@ -255,7 +258,7 @@ class StereoCalibration(object):
                         print(
                             f'Camera Matrix initialization with HFOV of {cam_info["name"]} is.............')
                         print(cameraMatrixInit)
-                    distCoeffsInit = np.zeros((5, 1))
+                    distCoeffsInit = np.zeros((12, 1))
                     if cam_info["name"] not in self.cameraDistortion:
                         self.cameraDistortion[cam_info["name"]] = distCoeffsInit
 
@@ -489,10 +492,48 @@ class StereoCalibration(object):
         return filteredCorners, filteredIds, img_path
 
     def get_distortion_flags(self,name):
+        def is_binary_string(s: str) -> bool:
+        # Check if all characters in the string are '0' or '1'
+            return all(char in '01' for char in s)
         if self.distortion_model[name] == None:
             print("Use DEFAULT model")
             flags = cv2.CALIB_RATIONAL_MODEL
+        elif is_binary_string(self.distortion_model[name]):
+            flags = cv2.CALIB_RATIONAL_MODEL
             flags += cv2.CALIB_TILTED_MODEL
+            flags += cv2.CALIB_THIN_PRISM_MODEL
+            binary_number = int(self.distortion_model[name], 2)
+            # Print the results
+            clauses_status = [(binary_number & (1 << i)) != 0 for i in range(len(self.distortion_model[name]))]
+            clauses_status = clauses_status[::-1]
+            print(clauses_status)
+            if clauses_status[0]:
+                print("FIX_K1")
+                flags += cv2.CALIB_FIX_K1
+            if clauses_status[1]:
+                print("FIX_K2")
+                flags += cv2.CALIB_FIX_K2
+            if clauses_status[2]:
+                print("FIX_K3")
+                flags += cv2.CALIB_FIX_K3
+            if clauses_status[3]:
+                print("FIX_K4")
+                flags += cv2.CALIB_FIX_K4
+            if clauses_status[4]:
+                print("FIX_K5")
+                flags += cv2.CALIB_FIX_K5
+            if clauses_status[5]:
+                print("FIX_K6")
+                flags += cv2.CALIB_FIX_K6
+            if clauses_status[6]:
+                print("FIX_TANGENT_DISTORTION")
+                flags += cv2.CALIB_ZERO_TANGENT_DIST
+            if clauses_status[7]:
+                print("FIX_TILTED_DISTORTION")
+                flags += cv2.CALIB_FIX_TAUX_TAUY
+            if clauses_status[8]:
+                print("FIX_PRISM_DISTORTION")
+                flags += cv2.CALIB_FIX_S1_S2_S3_S4
 
         elif isinstance(self.distortion_model[name], str):
             if self.distortion_model[name] == "NORMAL":
@@ -1231,7 +1272,7 @@ class StereoCalibration(object):
                         plt.legend()
                         plt.show()
                         traceLevel_copy = self.traceLevel
-                        self.traceLevel = 8
+                        self.traceLevel = 14
                         filtered_corners, filtered_ids , all_error,removed_corners, removed_ids, removed_error= self.features_filtering_function(rotation_vectors, translation_vectors, camera_matrix, distortion_coefficients, ret, allCorners, allIds, camera = name, threshold = 1.0)
                         self.traceLevel = traceLevel_copy
                     break
@@ -1420,29 +1461,8 @@ class StereoCalibration(object):
                 # flags |= cv2.CALIB_USE_EXTRINSIC_GUESS
                 # print(flags)
                 flags = cv2.CALIB_FIX_INTRINSIC
-                if self.ccm_model != {}:
-                    self.model = self.ccm_model
-                if self.model == None:
-                    flags += cv2.CALIB_RATIONAL_MODEL
-                elif isinstance(self.model, str):
-                    if self.model == "NORMAL":
-                        flags += cv2.CALIB_RATIONAL_MODEL
-                        flags += cv2.CALIB_TILTED_MODEL
-                    if self.model == "TILTED":
-                        flags += cv2.CALIB_RATIONAL_MODEL 
-                        flags += cv2.CALIB_TILTED_MODEL
-                    elif self.model == "PRISM":
-                        flags += cv2.CALIB_RATIONAL_MODEL 
-                        flags += cv2.CALIB_TILTED_MODEL
-                        flags += cv2.CALIB_THIN_PRISM_MODEL
-                    elif self.model == "THERMAL":
-                        print("Using THERMAL model")
-                        flags += cv2.CALIB_RATIONAL_MODEL
-                        flags += cv2.CALIB_FIX_K3
-                        flags += cv2.CALIB_FIX_K5
-                        flags += cv2.CALIB_FIX_K6
-                elif isinstance(self.model, int):
-                    flags = self.model
+                distortion_flags = self.get_distortion_flags(left_name)
+                flags += distortion_flags
                 # print(flags)
                 if self.traceLevel == 3 or self.traceLevel == 10:
                     print('Printing Extrinsics guesses...')
