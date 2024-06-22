@@ -180,6 +180,8 @@ class StereoCalibration(object):
         self.calib_model = {}
         self.collected_features = {}
         self.collected_ids = {}
+        self.all_features = {}
+        self.all_errors = {}
         self.data_path = filepath
         self.charucos = charucos 
         self.aruco_dictionary = aruco.Dictionary_get(aruco.DICT_4X4_1000)
@@ -649,7 +651,7 @@ class StereoCalibration(object):
                 # Collect data for valid points
                 reported_error.extend(errors)
                 all_error.extend(errors[valid_mask])
-                display_corners.extend(corners2[valid_mask])
+                display_corners.extend(corners2)
                 display_points.extend(imgpoints2[valid_mask])
                 all_points.append(imgpoints2[valid_mask])  # Collect valid points for calibration
                 all_corners.append(corners2[valid_mask].reshape(-1, 1, 2))   # Collect valid corners for calibration
@@ -826,6 +828,12 @@ class StereoCalibration(object):
             cv2.imshow('Quadrants with Points', image)
             cv2.waitKey(0)
             cv2.destroyAllWindows()
+        if camera not in self.all_features.keys():
+            self.all_features[camera] = display_corners
+        self.all_features[camera] = display_corners
+        if camera not in self.all_errors.keys():
+            self.all_errors[camera] = reported_error
+        self.all_errors[camera] = reported_error
         return all_corners ,all_ids, all_error, removed_corners, removed_ids, removed_error
 
     def detect_charuco_board(self, image: np.array):
