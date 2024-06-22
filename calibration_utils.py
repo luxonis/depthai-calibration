@@ -1272,7 +1272,7 @@ class StereoCalibration(object):
                         plt.legend()
                         plt.show()
                         traceLevel_copy = self.traceLevel
-                        self.traceLevel = 14
+                        self.traceLevel = 8
                         filtered_corners, filtered_ids , all_error,removed_corners, removed_ids, removed_error= self.features_filtering_function(rotation_vectors, translation_vectors, camera_matrix, distortion_coefficients, ret, allCorners, allIds, camera = name, threshold = 1.0)
                         self.traceLevel = traceLevel_copy
                     break
