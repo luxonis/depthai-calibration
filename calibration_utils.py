@@ -1160,8 +1160,8 @@ class StereoCalibration(object):
         intrinsic_array = {"f_x": [], "f_y": [], "c_x": [],"c_y": []}
         distortion_array = {}
         index = 0
-        
-        fig, ax = plt.subplots()
+        if self.traceLevel != 0:
+            fig, ax = plt.subplots()
         camera_matrix = cameraMatrixInit
         distortion_coefficients = distCoeffsInit
         rotation_vectors = rvecs
