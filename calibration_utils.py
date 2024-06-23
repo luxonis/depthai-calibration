@@ -832,7 +832,7 @@ class StereoCalibration(object):
             self.all_features[camera] = display_corners
         self.all_features[camera] = display_corners
         if camera not in self.all_errors.keys():
-            self.all_errors[camera] = reported_error
+            self.all_errors[camera] = all_error
         self.all_errors[camera] = reported_error
         return all_corners ,all_ids, all_error, removed_corners, removed_ids, removed_error
 
