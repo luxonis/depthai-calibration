@@ -138,6 +138,20 @@ def polygon_from_image_name(image_name):
     """Returns the polygon index from an image name (ex: "left_p10_0.png" => 10)"""
     return int(re.findall("p(\d+)", image_name)[0])
 
+class StereoExceptions(Exception):
+    def __init__(self, message, stage,element, id, path=None, *args, **kwargs) -> None:
+        self.stage = stage
+        self.path = path
+        self.element = element
+        self.id = id
+        super().__init__(message, *args, **kwargs)
+
+    @property
+    def summary(self) -> str:
+        """
+        Returns a more comprehensive summary of the exception
+        """
+        return f"'{self.args[0]}' (occured during stage '{self.stage}' on element '{self.element}:{self.id}')"
 
 
 class StereoCalibration(object):
@@ -218,6 +232,7 @@ class StereoCalibration(object):
                     break
         for camera in board_config['cameras'].keys():
             cam_info = board_config['cameras'][camera]
+            self.id = cam_info["name"]
             if cam_info["name"] not in self.disableCamera:
                 print(
                     '<------------Calibrating {} ------------>'.format(cam_info['name']))
@@ -474,26 +489,30 @@ class StereoCalibration(object):
         flags = cv2.CALIB_USE_INTRINSIC_GUESS + distortion_flags
         current = time.time()
         filtered_corners, filtered_ids,all_error, removed_corners, removed_ids, removed_error = self.features_filtering_function(rvecs, tvecs, cameraMatrixInit, distCoeffsInit, ret, allCorners, allIds, camera = name)
-        """for index, corners in enumerate(filtered_corners):
-            print(len(corners))
+        corner_detector = filtered_corners.copy()
+        for index, corners in enumerate(filtered_corners):
             if len(corners) < 4:
-                filtered_corners.remove(corners)
-                filtered_corners.remove(filtered_ids[index])"""
+                corner_detector.remove(corners)
+        if len(corner_detector) < int(len(self.img_path)*0.75):
+            raise StereoExceptions(message="More than 1/4 of images has less than 4 corners", stage="filtering", element=name, id=self.id)
 
                 
         print(f"Filtering {time.time() -current}s")
-        (ret, camera_matrix, distortion_coefficients,
-                 rotation_vectors, translation_vectors,
-                 stdDeviationsIntrinsics, stdDeviationsExtrinsics,
-                 perViewErrors) = cv2.aruco.calibrateCameraCharucoExtended(
-                    charucoCorners=filtered_corners,
-                    charucoIds=filtered_ids,
-                    board=self.board,
-                    imageSize=imsize,
-                    cameraMatrix=cameraMatrixInit,
-                    distCoeffs=distCoeffsInit,
-                    flags=flags,
-                    criteria=(cv2.TERM_CRITERIA_EPS & cv2.TERM_CRITERIA_COUNT, 1000, 1e-6))
+        try:
+            (ret, camera_matrix, distortion_coefficients,
+                     rotation_vectors, translation_vectors,
+                     stdDeviationsIntrinsics, stdDeviationsExtrinsics,
+                     perViewErrors) = cv2.aruco.calibrateCameraCharucoExtended(
+                        charucoCorners=filtered_corners,
+                        charucoIds=filtered_ids,
+                        board=self.board,
+                        imageSize=imsize,
+                        cameraMatrix=cameraMatrixInit,
+                        distCoeffs=distCoeffsInit,
+                        flags=flags,
+                        criteria=(cv2.TERM_CRITERIA_EPS & cv2.TERM_CRITERIA_COUNT, 1000, 1e-6))
+        except:
+            raise StereoExceptions(message="First intrisic calibration failed", stage="filtering", element=name, id=self.id)
         self.cameraIntrinsics[name] = camera_matrix
         self.cameraDistortion[name] = distortion_coefficients
         return removed_corners, filtered_corners, filtered_ids
@@ -985,7 +1004,7 @@ class StereoCalibration(object):
                 all_marker_ids.append(marker_ids)
             else:
                 print(im)
-                raise Exception("Failed to detect markers in the image")
+                raise StereoExceptions(message='Failed to detect more than 3 markers on image.', stage='filtering_features', element=im, id=self.id)
 
             if self.traceLevel == 2 or self.traceLevel == 4 or self.traceLevel == 10:
                 rgb_img = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
@@ -1218,18 +1237,21 @@ class StereoCalibration(object):
                     ax.hist(removed_error, bins = bins, color= plt.cm.summer(1-(index-1)/7), alpha = 0.8, edgecolor = "black")
                     ax.vlines(threshold, ymin = -0.5, ymax = len(all_error), color = "red")
                 start = time.time()
-                (ret, camera_matrix, distortion_coefficients,
-                 rotation_vectors, translation_vectors,
-                 stdDeviationsIntrinsics, stdDeviationsExtrinsics,
-                 perViewErrors) = cv2.aruco.calibrateCameraCharucoExtended(
-                    charucoCorners=filtered_corners,
-                    charucoIds=filtered_ids,
-                    board=self.board,
-                    imageSize=imsize,
-                    cameraMatrix=cameraMatrixInit,
-                    distCoeffs=distCoeffsInit,
-                    flags=flags,
-                    criteria=(cv2.TERM_CRITERIA_EPS & cv2.TERM_CRITERIA_COUNT, 50000, 1e-9))
+                try:
+                    (ret, camera_matrix, distortion_coefficients,
+                     rotation_vectors, translation_vectors,
+                     stdDeviationsIntrinsics, stdDeviationsExtrinsics,
+                     perViewErrors) = cv2.aruco.calibrateCameraCharucoExtended(
+                        charucoCorners=filtered_corners,
+                        charucoIds=filtered_ids,
+                        board=self.board,
+                        imageSize=imsize,
+                        cameraMatrix=cameraMatrixInit,
+                        distCoeffs=distCoeffsInit,
+                        flags=flags,
+                        criteria=(cv2.TERM_CRITERIA_EPS & cv2.TERM_CRITERIA_COUNT, 50000, 1e-9))
+                except:
+                    raise StereoExceptions(message="Intrisic calibration failed", stage="intrinsic_calibration", element=name, id=self.id)
                 cameraMatrixInit = camera_matrix
                 distCoeffsInit = distortion_coefficients
                 threshold = 5 * imsize[1]/800.0
