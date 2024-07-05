@@ -139,11 +139,9 @@ def polygon_from_image_name(image_name):
     return int(re.findall("p(\d+)", image_name)[0])
 
 class StereoExceptions(Exception):
-    def __init__(self, message, stage,element, id, path=None, *args, **kwargs) -> None:
+    def __init__(self, message, stage, path=None, *args, **kwargs) -> None:
         self.stage = stage
         self.path = path
-        self.element = element
-        self.id = id
         super().__init__(message, *args, **kwargs)
 
     @property
@@ -151,7 +149,7 @@ class StereoExceptions(Exception):
         """
         Returns a more comprehensive summary of the exception
         """
-        return f"'{self.args[0]}' (occured during stage '{self.stage}' on element '{self.element}:{self.id}')"
+        return f"'{self.args[0]}' (occured during stage '{self.stage}')"
 
 
 class StereoCalibration(object):
@@ -196,6 +194,7 @@ class StereoCalibration(object):
         self.collected_ids = {}
         self.all_features = {}
         self.all_errors = {}
+        self.errors = {}
         self.data_path = filepath
         self.charucos = charucos 
         self.aruco_dictionary = aruco.Dictionary_get(aruco.DICT_4X4_1000)
@@ -233,6 +232,7 @@ class StereoCalibration(object):
         for camera in board_config['cameras'].keys():
             cam_info = board_config['cameras'][camera]
             self.id = cam_info["name"]
+            self.errors[cam_info["name"]] = []
             if cam_info["name"] not in self.disableCamera:
                 print(
                     '<------------Calibrating {} ------------>'.format(cam_info['name']))
@@ -261,6 +261,9 @@ class StereoCalibration(object):
                 self.name = cam_info["name"]
                 if per_ccm:
                     all_features, all_ids, imsize = self.getting_features(images_path, cam_info["name"], features=features)
+                    if isinstance(all_features, str) and all_ids is None:
+                        self.errors[cam_info["name"]].append(all_features)
+                        continue
                     cam_info["imsize"] = imsize
 
                     f = imsize[0] / (2 * np.tan(np.deg2rad(cam_info["hfov"]/2)))
@@ -285,6 +288,11 @@ class StereoCalibration(object):
                         filtered_images = images_path
                     current_time = time.time()
                     removed_features, filtered_features, filtered_ids = self.filtering_features(all_features, all_ids, cam_info["name"],imsize,cam_info["hfov"], cameraMatrixInit, distCoeffsInit)
+
+                    if filtered_features is None:
+                        self.errors[cam_info["name"]].append("Camera failed durning filtering stage.")
+                        continue
+
                     print(f"Filtering takes: {time.time()-current_time}")
                     if  cam_info["name"] not in self.collected_features.keys():
                         self.collected_features[cam_info["name"]] = filtered_features
@@ -295,6 +303,9 @@ class StereoCalibration(object):
                     cam_info['filtered_corners'] = filtered_features
 
                     ret, intrinsics, dist_coeff, _, _, filtered_ids, filtered_corners, size, coverageImage, all_corners, all_ids = self.calibrate_wf_intrinsics(cam_info["name"], all_features, all_ids, filtered_features, filtered_ids, cam_info["imsize"], cam_info["hfov"], features, filtered_images)
+                    if isinstance(ret, str) and all_ids is None:
+                        self.errors[cam_info["name"]].append(ret)
+                        continue
                 else:
                     ret, intrinsics, dist_coeff, _, _, filtered_ids, filtered_corners, size, coverageImage, all_corners, all_ids = self.calibrate_intrinsics(
                         images_path, cam_info['hfov'], cam_info["name"])
@@ -337,7 +348,11 @@ class StereoCalibration(object):
                 coverage_file_path = filepath + '/' + coverage_name + '_coverage.png'
                 
                 cv2.imwrite(coverage_file_path, subImage)
-                
+        if self.errors:
+            string = ""
+            for key in self.errors.keys():
+                string += self.errors[key][0] + "\n"
+            raise StereoExceptions(message=string, stage="intrinsic")
 
         combinedCoverageImage = cv2.resize(combinedCoverageImage, (0, 0), fx=self.output_scale_factor, fy=self.output_scale_factor)
         if enable_disp_rectify:
@@ -470,6 +485,9 @@ class StereoCalibration(object):
         print(threshold_stepper)
         min_inlier = 1 - self.initial_min_filtered * (hfov / 60 + imsize[1] / 800 * 0.2)
         overall_pose = time.time()
+        for index, corners in enumerate(allCorners):
+            if len(corners) < 4:
+                return f"Less than 4 corners detected on {index} image.", None, None
         for corners, ids in zip(allCorners, allIds):
             current = time.time()
             self.index = index
@@ -494,7 +512,7 @@ class StereoCalibration(object):
             if len(corners) < 4:
                 corner_detector.remove(corners)
         if len(corner_detector) < int(len(self.img_path)*0.75):
-            raise StereoExceptions(message="More than 1/4 of images has less than 4 corners", stage="filtering", element=name, id=self.id)
+            return f"More than 1/4 of images has less than 4 corners for {name}", None, None
 
                 
         print(f"Filtering {time.time() -current}s")
@@ -512,7 +530,8 @@ class StereoCalibration(object):
                         flags=flags,
                         criteria=(cv2.TERM_CRITERIA_EPS & cv2.TERM_CRITERIA_COUNT, 1000, 1e-6))
         except:
-            raise StereoExceptions(message="First intrisic calibration failed", stage="filtering", element=name, id=self.id)
+            return f"First intrisic calibration failed for {name}", None, None
+
         self.cameraIntrinsics[name] = camera_matrix
         self.cameraDistortion[name] = distortion_coefficients
         return removed_corners, filtered_corners, filtered_ids
@@ -1004,7 +1023,7 @@ class StereoCalibration(object):
                 all_marker_ids.append(marker_ids)
             else:
                 print(im)
-                raise StereoExceptions(message='Failed to detect more than 3 markers on image.', stage='filtering_features', element=im, id=self.id)
+                return f'Failed to detect more than 3 markers on image {im}', None, None, None, None, None
 
             if self.traceLevel == 2 or self.traceLevel == 4 or self.traceLevel == 10:
                 rgb_img = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
@@ -1324,8 +1343,8 @@ class StereoCalibration(object):
                         self.traceLevel = traceLevel_copy
                     break
                 previous_ids = removed_ids
-        except KeyboardInterrupt:
-            pass
+        except:
+            return f"Failed to calibrate camera {name}", None, None, None, None, None, None, None ,None , None
         if self.traceLevel == 3 or self.traceLevel == 10:
             print('Per View Errors...')
             print(perViewErrors)
