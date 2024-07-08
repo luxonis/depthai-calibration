@@ -232,7 +232,6 @@ class StereoCalibration(object):
         for camera in board_config['cameras'].keys():
             cam_info = board_config['cameras'][camera]
             self.id = cam_info["name"]
-            self.errors[cam_info["name"]] = []
             if cam_info["name"] not in self.disableCamera:
                 print(
                     '<------------Calibrating {} ------------>'.format(cam_info['name']))
@@ -262,6 +261,8 @@ class StereoCalibration(object):
                 if per_ccm:
                     all_features, all_ids, imsize = self.getting_features(images_path, cam_info["name"], features=features)
                     if isinstance(all_features, str) and all_ids is None:
+                        if cam_info["name"] not in self.errors.keys():
+                            self.errors[cam_info["name"]] = []
                         self.errors[cam_info["name"]].append(all_features)
                         continue
                     cam_info["imsize"] = imsize
@@ -290,6 +291,8 @@ class StereoCalibration(object):
                     removed_features, filtered_features, filtered_ids = self.filtering_features(all_features, all_ids, cam_info["name"],imsize,cam_info["hfov"], cameraMatrixInit, distCoeffsInit)
 
                     if filtered_features is None:
+                        if cam_info["name"] not in self.errors.keys():
+                            self.errors[cam_info["name"]] = []
                         self.errors[cam_info["name"]].append("Camera failed durning filtering stage.")
                         continue
 
@@ -304,6 +307,8 @@ class StereoCalibration(object):
 
                     ret, intrinsics, dist_coeff, _, _, filtered_ids, filtered_corners, size, coverageImage, all_corners, all_ids = self.calibrate_wf_intrinsics(cam_info["name"], all_features, all_ids, filtered_features, filtered_ids, cam_info["imsize"], cam_info["hfov"], features, filtered_images)
                     if isinstance(ret, str) and all_ids is None:
+                        if cam_info["name"] not in self.errors.keys():
+                            self.errors[cam_info["name"]] = []
                         self.errors[cam_info["name"]].append(ret)
                         continue
                 else:
@@ -348,7 +353,7 @@ class StereoCalibration(object):
                 coverage_file_path = filepath + '/' + coverage_name + '_coverage.png'
                 
                 cv2.imwrite(coverage_file_path, subImage)
-        if self.errors:
+        if self.errors != {}:
             string = ""
             for key in self.errors.keys():
                 string += self.errors[key][0] + "\n"
