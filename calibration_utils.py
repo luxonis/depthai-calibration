@@ -293,7 +293,7 @@ class StereoCalibration(object):
                     if filtered_features is None:
                         if cam_info["name"] not in self.errors.keys():
                             self.errors[cam_info["name"]] = []
-                        self.errors[cam_info["name"]].append("Camera failed durning filtering stage.")
+                        self.errors[cam_info["name"]].append(f"Camera {cam_info["name"]} failed durning filtering stage.")
                         continue
 
                     print(f"Filtering takes: {time.time()-current_time}")
