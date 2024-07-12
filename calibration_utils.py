@@ -288,19 +288,24 @@ class StereoCalibration(object):
                     else:
                         filtered_images = images_path
                     current_time = time.time()
-                    removed_features, filtered_features, filtered_ids = self.filtering_features(all_features, all_ids, cam_info["name"],imsize,cam_info["hfov"], cameraMatrixInit, distCoeffsInit)
+                    if self.cameraModel != "fisheye":
+                        print("Filtering corners")
+                        removed_features, filtered_features, filtered_ids = self.filtering_features(all_features, all_ids, cam_info["name"],imsize,cam_info["hfov"], cameraMatrixInit, distCoeffsInit)
 
-                    if filtered_features is None:
-                        if cam_info["name"] not in self.errors.keys():
-                            self.errors[cam_info["name"]] = []
-                        self.errors[cam_info["name"]].append(removed_features)
-                        continue
+                        if filtered_features is None:
+                            if cam_info["name"] not in self.errors.keys():
+                                self.errors[cam_info["name"]] = []
+                            self.errors[cam_info["name"]].append(removed_features)
+                            continue
 
-                    print(f"Filtering takes: {time.time()-current_time}")
-                    if  cam_info["name"] not in self.collected_features.keys():
-                        self.collected_features[cam_info["name"]] = filtered_features
-                    if  cam_info["name"] not in self.collected_ids.keys():
-                        self.collected_ids[cam_info["name"]] = filtered_ids
+                        print(f"Filtering takes: {time.time()-current_time}")
+                        if  cam_info["name"] not in self.collected_features.keys():
+                            self.collected_features[cam_info["name"]] = filtered_features
+                        if  cam_info["name"] not in self.collected_ids.keys():
+                            self.collected_ids[cam_info["name"]] = filtered_ids
+                    else:
+                        filtered_features = all_features
+                        filtered_ids = all_ids
 
                     cam_info['filtered_ids'] = filtered_ids
                     cam_info['filtered_corners'] = filtered_features
@@ -1373,7 +1378,7 @@ class StereoCalibration(object):
         for corners, ids in zip(allCorners, allIds):
             objpts = self.charuco_ids_to_objpoints(ids)
             corners_undist = cv2.fisheye.undistortPoints(corners, cameraMatrixInit, distCoeffsInit)
-            rvec, tvec, new_ids = self.camera_pose_charuco(objpts, corners_undist, np.eye(3), np.array((0.0,0,0,0)))
+            rvec, tvec, new_ids = self.camera_pose_charuco(objpts, corners_undist,ids, np.eye(3), np.array((0.0,0,0,0)))
             tvecs.append(tvec)
             rvecs.append(rvec)
         corners_removed, filtered_ids, filtered_corners = self.filter_corner_outliers(allIds, allCorners, cameraMatrixInit, distCoeffsInit, rvecs, tvecs)
