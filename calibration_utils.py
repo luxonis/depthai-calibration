@@ -252,7 +252,7 @@ class StereoCalibration(object):
 
                 features = None
                 self.img_path = glob.glob(images_path + "/*")
-                if charucos != {}:
+                if charucos == {}:
                     self.img_path = sorted(self.img_path, key=lambda x: int(x.split('_')[1]))
                 else:
                     self.img_path.sort()
