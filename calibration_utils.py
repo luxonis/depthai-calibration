@@ -469,15 +469,11 @@ class StereoCalibration(object):
             return allCorners, allIds, imsize
 
         elif features == None or features == "charucos":
-            img_path = glob.glob(img_path + "/*")
-            img_path.sort()
-            allCorners, allIds, _, _, imsize, _ = self.analyze_charuco(img_path)
+            allCorners, allIds, _, _, imsize, _ = self.analyze_charuco(self.img_path)
             return allCorners, allIds, imsize
 
         if features == "checker_board":
-            img_path = glob.glob(img_path + "/*")
-            img_path.sort()
-            allCorners, allIds, _, _, imsize, _ = self.analyze_charuco(img_path)
+            allCorners, allIds, _, _, imsize, _ = self.analyze_charuco(self.img_path)
             return allCorners, allIds, imsize
         ###### ADD HERE WHAT IT IS NEEDED ######
 
