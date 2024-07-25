@@ -7,6 +7,8 @@ import shutil
 import numpy as np
 from scipy.spatial.transform import Rotation
 import multiprocessing
+from multiprocessing.pool import ThreadPool
+
 import time
 import json
 import cv2.aruco as aruco
@@ -274,7 +276,9 @@ def get_and_filter_features(calibration, images_path, width, height, features, c
         filtered_ids = all_ids
     return filtered_features, filtered_ids, all_features, all_ids, filtered_images, cameraIntrinsics, distCoeff
 
-def calibrate_outside(calibration, features, images_path, cam_info, calib_model, distortion_model, charucos, _cameraModel, intrinsic_img, width, height):
+def calibrate_outside(args):
+    calibration, features, images_path, cam_info, calib_model, distortion_model, charucos, _cameraModel, intrinsic_img, width, height = args
+
     if per_ccm:
         start = time.time()
         print('starting getting and filtering')
@@ -355,11 +359,8 @@ def calibrate_ccms(calibration, board_config, filepath, charucos, model, ccm_mod
             img_path.sort()
         cam_info["img_path"] = img_path
 
-    #with Pool() as pool:
-    #    result = pool.map(calibrate_outside, [[features, images_path, cam_info, calibModels[cam_info['name']], distortionModels[cam_info['name']], charucos[cam_info['name']], _cameraModel, intrinsic_img, cam_info['width'], cam_info['height'], squaresX, squaresY, squareSize, markerSize] for _, cam_info in activeCameras])
-    for cam, cam_info in activeCameras:
-            
-        K, d = calibrate_outside(calibration, features, images_path, cam_info, calibModels[cam_info['name']], distortionModels[cam_info['name']], charucos[cam_info['name']], _cameraModel, intrinsic_img, cam_info['width'], cam_info['height'])
+    with ThreadPool(3) as pool:
+        result = pool.map(calibrate_outside, [[calibration, features, images_path, cam_info, calibModels[cam_info['name']], distortionModels[cam_info['name']], charucos[cam_info['name']], _cameraModel, intrinsic_img, cam_info['width'], cam_info['height']] for _, cam_info in activeCameras])
 
     return calibModels, distortionModels, allCameraIntrinsics, allCameraDistCoeffs
 
