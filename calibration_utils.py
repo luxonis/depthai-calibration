@@ -189,11 +189,8 @@ class StereoCalibration(object):
         self.calib_model = {}
         self.collected_features = {}
         self.collected_ids = {}
-        self.all_features = {}
-        self.all_errors = {}
         self.errors = {}
         self.data_path = filepath
-        self.charucos = charucos 
         self.aruco_dictionary = aruco.Dictionary_get(aruco.DICT_4X4_1000)
         self.squaresX = squaresX
         self.squaresY = squaresY
@@ -256,7 +253,7 @@ class StereoCalibration(object):
                 cam_info["img_path"] = self.img_path
                 self.name = cam_info["name"]
                 if per_ccm:
-                    all_features, all_ids, imsize = self.getting_features(images_path, cam_info["name"], features=features)
+                    all_features, all_ids, imsize = self.getting_features(images_path, cam_info["name"], features=features, charucos=charucos)
                     if isinstance(all_features, str) and all_ids is None:
                         if cam_info["name"] not in self.errors.keys():
                             self.errors[cam_info["name"]] = []
@@ -303,7 +300,7 @@ class StereoCalibration(object):
                     cam_info['filtered_ids'] = filtered_ids
                     cam_info['filtered_corners'] = filtered_features
 
-                    ret, intrinsics, dist_coeff, _, _, filtered_ids, filtered_corners, size, coverageImage, all_corners, all_ids = self.calibrate_wf_intrinsics(cam_info["name"], all_features, all_ids, filtered_features, filtered_ids, cam_info["imsize"], cam_info["hfov"], features, filtered_images)
+                    ret, intrinsics, dist_coeff, _, _, filtered_ids, filtered_corners, size, coverageImage, all_corners, all_ids = self.calibrate_wf_intrinsics(cam_info["name"], all_features, all_ids, filtered_features, filtered_ids, cam_info["imsize"], cam_info["hfov"], features, filtered_images, charucos)
                     if isinstance(ret, str) and all_ids is None:
                         if cam_info["name"] not in self.errors.keys():
                             self.errors[cam_info["name"]] = []
@@ -311,7 +308,7 @@ class StereoCalibration(object):
                         continue
                 else:
                     ret, intrinsics, dist_coeff, _, _, filtered_ids, filtered_corners, size, coverageImage, all_corners, all_ids = self.calibrate_intrinsics(
-                        images_path, cam_info['hfov'], cam_info["name"])
+                        images_path, cam_info['hfov'], cam_info["name"], charucos)
                     cam_info['filtered_ids'] = filtered_ids
                     cam_info['filtered_corners'] = filtered_corners
                 self.cameraIntrinsics[cam_info["name"]] = intrinsics
@@ -447,11 +444,11 @@ class StereoCalibration(object):
     
         return 1, board_config
 
-    def getting_features(self, img_path, name, features = None):
-        if self.charucos != {}:
+    def getting_features(self, img_path, name, features = None, charucos=None):
+        if charucos != {}:
             allCorners = []
             allIds = []
-            for index, charuco_img in enumerate(self.charucos[name]):
+            for index, charuco_img in enumerate(charucos[name]):
                 ids, charucos = charuco_img
                 allCorners.append(charucos)
                 allIds.append(ids)
@@ -621,7 +618,7 @@ class StereoCalibration(object):
             flags = self.distortion_model[name]
         return flags
 
-    def calibrate_wf_intrinsics(self, name, all_Features, all_features_Ids, allCorners, allIds, imsize, hfov, features, image_files):
+    def calibrate_wf_intrinsics(self, name, all_Features, all_features_Ids, allCorners, allIds, imsize, hfov, features, image_files, charucos):
         image_files = glob.glob(image_files + "/*")
         image_files.sort()
         coverageImage = np.ones(imsize[::-1], np.uint8) * 255
@@ -632,7 +629,7 @@ class StereoCalibration(object):
                 distortion_flags = self.get_distortion_flags(name)
                 ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, filtered_ids, filtered_corners, allCorners, allIds  = self.calibrate_camera_charuco(
                     all_Features, all_features_Ids,allCorners, allIds, imsize, hfov, name, distortion_flags)
-            if self.charucos == {}:
+            if charucos == {}:
                 self.undistort_visualization(
                     image_files, camera_matrix, distortion_coefficients, imsize, name)
 
@@ -725,12 +722,6 @@ class StereoCalibration(object):
             total_error_squared = 0
             total_points = 0
 
-        if camera not in self.all_features.keys():
-            self.all_features[camera] = display_corners
-        self.all_features[camera] = display_corners
-        if camera not in self.all_errors.keys():
-            self.all_errors[camera] = all_error
-        self.all_errors[camera] = reported_error
         return all_corners ,all_ids, all_error, removed_corners, removed_ids, removed_error
 
     def detect_charuco_board(self, image: np.array):
@@ -853,17 +844,17 @@ class StereoCalibration(object):
         # imsize = gray.shape[::-1]
         return allCorners, allIds, all_marker_corners, all_marker_ids, gray.shape[::-1], all_recovered
 
-    def calibrate_intrinsics(self, image_files, hfov, name):
+    def calibrate_intrinsics(self, image_files, hfov, name, charucos):
         image_files = glob.glob(image_files + "/*")
         image_files.sort()
         assert len(
             image_files) != 0, "ERROR: Images not read correctly, check directory"
-        if self.charucos == {}:
+        if charucos == {}:
             allCorners, allIds, _, _, imsize, _ = self.analyze_charuco(image_files)
         else:
             allCorners = []
             allIds = []
-            for index, charuco_img in enumerate(self.charucos[name]):
+            for index, charuco_img in enumerate(charucos[name]):
                 ids, charucos = charuco_img
                 allCorners.append(charucos)
                 allIds.append(ids)
