@@ -6,9 +6,11 @@ import os
 import shutil
 import numpy as np
 from scipy.spatial.transform import Rotation
+import multiprocessing
 import time
 import json
 import cv2.aruco as aruco
+import threading
 import logging
 logging.getLogger('matplotlib').setLevel(logging.WARNING)
 
@@ -150,6 +152,7 @@ class StereoExceptions(Exception):
         Returns a more comprehensive summary of the exception
         """
         return f"'{self.args[0]}' (occured during stage '{self.stage}')"
+
 def get_and_filter_features(calibration, images_path, width, height, features, charucos, cam_info, intrinsic_img, _cameraModel, distortion_model):
     all_features, all_ids, imsize = calibration.getting_features(images_path, width, height, features=features, charucos=charucos)
 
@@ -170,6 +173,7 @@ def get_and_filter_features(calibration, images_path, width, height, features, c
         all_features, all_ids, filtered_images = calibration.remove_features(filtered_features, filtered_ids, intrinsic_img[cam_info["name"]], image_files)
     else:
         filtered_images = images_path
+
     current_time = time.time()
     if _cameraModel != "fisheye":
         print("Filtering corners")
@@ -285,6 +289,63 @@ def calibrate_outside(calibration, resizeWidth, resizeHeight, combinedCoverageIm
     cv2.imwrite(coverage_file_path, subImage)
     return combinedCoverageImage
 
+def estimate_pose_and_filter_single(*args):
+    corners, ids, K, d, min_inliers, max_threshold, threshold_stepper, squaresX, squaresY, squareSize, markerSize = args[0]
+    
+    
+    aruco_dictionary = aruco.Dictionary_get(aruco.DICT_4X4_1000)
+    board = aruco.CharucoBoard_create(
+        # 22, 16,
+        squaresX, squaresY,
+        squareSize,
+        markerSize,
+        aruco_dictionary)
+    
+    objpoints = np.array([board.chessboardCorners[id] for id in ids], dtype=np.float32)
+    
+    ini_threshold=5
+    threshold = None
+    
+    objects = []
+    all_objects = []
+    while len(objects) < len(objpoints[:,0,0]) * min_inliers:
+        if ini_threshold > max_threshold:
+            break
+        ret, rvec, tvec, objects  = cv2.solvePnPRansac(objpoints, corners, K, d, flags = cv2.SOLVEPNP_P3P, reprojectionError = ini_threshold,  iterationsCount = 10000, confidence = 0.9)
+        all_objects.append(objects)
+        imgpoints2 = objpoints.copy()
+
+        all_corners2 = corners.copy()
+        all_corners2 = np.array([all_corners2[id[0]] for id in objects])
+        imgpoints2 = np.array([imgpoints2[id[0]] for id in objects])
+
+        ret, rvec, tvec = cv2.solvePnP(imgpoints2, all_corners2, K, d)
+        
+        ini_threshold += threshold_stepper
+    if not ret:
+        raise RuntimeError('Exception') # TODO : Handle
+    
+    if ids is not None and corners.size > 0:
+        ids = ids.flatten()  # Flatten the IDs from 2D to 1D
+        imgpoints2, _ = cv2.projectPoints(objpoints, rvec, tvec, K, d)
+        corners2 = corners.reshape(-1, 2)
+        imgpoints2 = imgpoints2.reshape(-1, 2)
+
+        errors = np.linalg.norm(corners2 - imgpoints2, axis=1)
+        if threshold == None:
+            threshold = max(2*np.median(errors), 150)
+        valid_mask = errors <= threshold
+        removed_mask = ~valid_mask
+
+        # Collect valid IDs in the original format (array of arrays)
+        valid_ids = ids[valid_mask]
+        #filtered_ids.append(valid_ids.reshape(-1, 1).astype(np.int32))  # Reshape and store as array of arrays
+
+        # Collect data for valid points
+        #filtered_corners.append(corners2[valid_mask].reshape(-1, 1, 2))   # Collect valid corners for calibration
+
+        #removed_corners.extend(corners2[removed_mask])
+        return valid_ids.reshape(-1, 1).astype(np.int32), corners2[valid_mask].reshape(-1, 1, 2), corners2[removed_mask]
 
 class StereoCalibration(object):
     """Class to Calculate Calibration and Rectify a Stereo Camera."""
@@ -326,6 +387,10 @@ class StereoCalibration(object):
             square_size,
             mrk_size,
             self._aruco_dictionary)
+        self.squaresX = squaresX
+        self.squaresY = squaresY
+        self.squareSize = square_size
+        self.markerSize = mrk_size
 
         self.cams = []
         # parameters = aruco.DetectorParameters_create()
@@ -465,51 +530,52 @@ class StereoCalibration(object):
             return allCorners, allIds, imsize
         ###### ADD HERE WHAT IT IS NEEDED ######
 
-    def filtering_features(self,allCorners, allIds, name,imsize, hfov, cameraMatrixInit, distCoeffsInit, distortionModel):
-
+    def estimate_pose_and_filter(self, allCorners, allIds, name,imsize, hfov, K, d):
          # check if there are any suspicious corners with high reprojection error
-        rvecs = []
-        tvecs = []
         index = 0
-        self.index = 0
         max_threshold = 75 + self.initial_max_threshold * (hfov / 30 + imsize[1] / 800 * 0.2)
         threshold_stepper = int(1.5 * (hfov / 30 + imsize[1] / 800))
         if threshold_stepper < 1:
             threshold_stepper = 1
         print(threshold_stepper)
-        min_inlier = 1 - self.initial_min_filtered * (hfov / 60 + imsize[1] / 800 * 0.2)
+        min_inliers = 1 - self.initial_min_filtered * (hfov / 60 + imsize[1] / 800 * 0.2)
         overall_pose = time.time()
         for index, corners in enumerate(allCorners):
             if len(corners) < 4:
-                return f"Less than 4 corners detected on {index} image.", None, None
-        for corners, ids in zip(allCorners, allIds):
-            current = time.time()
-            self.index = index
-            objpts = self.charuco_ids_to_objpoints(ids)
-            rvec, tvec, newids = self.camera_pose_charuco(objpts, corners, ids, cameraMatrixInit, distCoeffsInit, max_threshold = max_threshold, min_inliers=min_inlier, ini_threshold = 5, threshold_stepper=threshold_stepper)
-            #allCorners[index] = np.array([corners[id[0]-1] for id in newids])
-            #allIds[index] = np.array([ids[id[0]-1] for id in newids])
-            tvecs.append(tvec)
-            rvecs.append(rvec)
-            print(f"Pose estimation {index}, {time.time() -current}s")
-            index += 1
+                raise RuntimeError(f"Less than 4 corners detected on {index} image.")
+        current = time.time()
+        
+        filtered_corners = []
+        filtered_ids = []
+        removed_corners = []
+            
+        
+        #for corners, ids in zip(allCorners, allIds):
+        current = time.time()
+        
+        pool = multiprocessing.Pool(processes=16)
+
+        # Map the functions to the pool
+        results = pool.map(func=estimate_pose_and_filter_single, iterable=[(a, b, K, d, min_inliers, max_threshold, threshold_stepper, self.squaresX, self.squaresY, self.squareSize, self.markerSize) for a, b in zip(allCorners, allIds)])
+
+        filtered_ids, filtered_corners, removed_corners = zip(*results)
+
         print(f"Overall pose estimation {time.time() - overall_pose}s")
 
-        # Here we need to get initialK and parameters for each camera ready and fill them inside reconstructed reprojection error per point
-        ret = 0.0
+        if sum([len(corners) < 4 for corners in filtered_corners]) > 0.15 * len(allCorners):
+            raise RuntimeError(f"More than 1/4 of images has less than 4 corners for {name}")
+        print(f"Filtering {time.time() -current}s")
+        
+        return filtered_corners, filtered_ids, removed_corners
+
+    def filtering_features(self, allCorners, allIds, name,imsize, hfov, cameraMatrixInit, distCoeffsInit, distortionModel):
+
+         # check if there are any suspicious corners with high reprojection error
+        filtered_corners, filtered_ids, removed_corners = self.estimate_pose_and_filter(allCorners, allIds, name,imsize, hfov, cameraMatrixInit, distCoeffsInit)
+
         distortion_flags = self.get_distortion_flags(distortionModel)
         flags = cv2.CALIB_USE_INTRINSIC_GUESS + distortion_flags
-        current = time.time()
-        filtered_corners, filtered_ids,all_error, removed_corners, removed_ids, removed_error = self.features_filtering_function(rvecs, tvecs, cameraMatrixInit, distCoeffsInit, ret, allCorners, allIds, camera = name)
-        corner_detector = filtered_corners.copy()
-        for index, corners in enumerate(filtered_corners):
-            if len(corners) < 4:
-                corner_detector.remove(corners)
-        if len(corner_detector) < int(len(allCorners)*0.75):
-            return f"More than 1/4 of images has less than 4 corners for {name}", None, None
-
                 
-        print(f"Filtering {time.time() -current}s")
         try:
             (ret, camera_matrix, distortion_coefficients,
                      rotation_vectors, translation_vectors,
@@ -954,12 +1020,10 @@ class StereoCalibration(object):
          # check if there are any suspicious corners with high reprojection error
         rvecs = []
         tvecs = []
-        self.index = 0
         index = 0
         max_threshold = 10 + self.initial_max_threshold * (hfov / 30 + imsize[1] / 800 * 0.2)
         min_inlier = 1 - self.initial_min_filtered * (hfov / 60 + imsize[1] / 800 * 0.2)
         for corners, ids in zip(allCorners, allIds):
-            self.index = index
             objpts = self.charuco_ids_to_objpoints(ids)
             rvec, tvec, newids = self.camera_pose_charuco(objpts, corners, ids, cameraIntrinsics, distCoeff)
             tvecs.append(tvec)
