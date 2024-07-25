@@ -173,7 +173,6 @@ class StereoCalibration(object):
         """Function to calculate calibration for stereo camera."""
         start_time = time.time()
         # init object data
-        self.enable_rectification_disp = True
         if intrinsic_img != {}:
             for cam in intrinsic_img:
                 intrinsic_img[cam].sort(reverse=True)
@@ -182,24 +181,21 @@ class StereoCalibration(object):
                 extrinsic_img[cam].sort(reverse=True)
         self.intrinsic_img = intrinsic_img
         self.extrinsic_img = extrinsic_img
-        self.cameraModel = camera_model
         self.cameraIntrinsics = {}
         self.cameraDistortion = {}
         self.distortion_model = {}
         self.calib_model = {}
-        self.collected_features = {}
-        self.collected_ids = {}
         self.errors = {}
-        self.data_path = filepath
-        self.aruco_dictionary = aruco.Dictionary_get(aruco.DICT_4X4_1000)
-        self.squaresX = squaresX
-        self.squaresY = squaresY
-        self.board = aruco.CharucoBoard_create(
+        self._enable_rectification_disp = True
+        self._cameraModel = camera_model
+        self._data_path = filepath
+        self._aruco_dictionary = aruco.Dictionary_get(aruco.DICT_4X4_1000)
+        self._board = aruco.CharucoBoard_create(
             # 22, 16,
             squaresX, squaresY,
             square_size,
             mrk_size,
-            self.aruco_dictionary)
+            self._aruco_dictionary)
 
         self.cams = []
         # parameters = aruco.DetectorParameters_create()
@@ -237,7 +233,7 @@ class StereoCalibration(object):
                     self.calib_model[cam_info["name"]] = self.cameraModel_ccm
                     self.distortion_model[cam_info["name"]] = self.model_ccm
                 else:
-                    self.calib_model[cam_info["name"]] = self.cameraModel
+                    self.calib_model[cam_info["name"]] = self._cameraModel
                     if cam_info["name"] in self.ccm_model:
                         self.distortion_model[cam_info["name"]] = self.ccm_model[cam_info["name"]]
                     else:
@@ -278,7 +274,7 @@ class StereoCalibration(object):
                     else:
                         filtered_images = images_path
                     current_time = time.time()
-                    if self.cameraModel != "fisheye":
+                    if self._cameraModel != "fisheye":
                         print("Filtering corners")
                         removed_features, filtered_features, filtered_ids = self.filtering_features(all_features, all_ids, cam_info["name"],imsize,cam_info["hfov"], cameraMatrixInit, distCoeffsInit)
 
@@ -289,10 +285,6 @@ class StereoCalibration(object):
                             continue
 
                         print(f"Filtering takes: {time.time()-current_time}")
-                        if  cam_info["name"] not in self.collected_features.keys():
-                            self.collected_features[cam_info["name"]] = filtered_features
-                        if  cam_info["name"] not in self.collected_ids.keys():
-                            self.collected_ids[cam_info["name"]] = filtered_ids
                     else:
                         filtered_features = all_features
                         filtered_ids = all_ids
@@ -516,7 +508,7 @@ class StereoCalibration(object):
                      perViewErrors) = cv2.aruco.calibrateCameraCharucoExtended(
                         charucoCorners=filtered_corners,
                         charucoIds=filtered_ids,
-                        board=self.board,
+                        board=self._board,
                         imageSize=imsize,
                         cameraMatrix=cameraMatrixInit,
                         distCoeffs=distCoeffsInit,
@@ -685,7 +677,7 @@ class StereoCalibration(object):
             frame = cv2.imread(frame_path)
             if ids is not None and corners.size > 0:
                 ids = ids.flatten()  # Flatten the IDs from 2D to 1D
-                objPoints = np.array([self.board.chessboardCorners[id] for id in ids], dtype=np.float32)
+                objPoints = np.array([self._board.chessboardCorners[id] for id in ids], dtype=np.float32)
                 imgpoints2, _ = cv2.projectPoints(objPoints, rvecs[i], tvecs[i], cameraMatrix, distCoeffs)
                 corners2 = corners.reshape(-1, 2)
                 imgpoints2 = imgpoints2.reshape(-1, 2)
@@ -727,11 +719,11 @@ class StereoCalibration(object):
     def detect_charuco_board(self, image: np.array):
         arucoParams = cv2.aruco.DetectorParameters_create()
         arucoParams.minMarkerDistanceRate = 0.01
-        corners, ids, rejectedImgPoints = cv2.aruco.detectMarkers(image, self.aruco_dictionary, parameters=arucoParams)  # First, detect markers
-        marker_corners, marker_ids, refusd, recoverd = cv2.aruco.refineDetectedMarkers(image, self.board, corners, ids, rejectedCorners=rejectedImgPoints)
+        corners, ids, rejectedImgPoints = cv2.aruco.detectMarkers(image, self._aruco_dictionary, parameters=arucoParams)  # First, detect markers
+        marker_corners, marker_ids, refusd, recoverd = cv2.aruco.refineDetectedMarkers(image, self._board, corners, ids, rejectedCorners=rejectedImgPoints)
         # If found, add object points, image points (after refining them)
         if len(marker_corners) > 0:
-            ret, corners, ids = cv2.aruco.interpolateCornersCharuco(marker_corners,marker_ids,image, self.board, minMarkers = 1)
+            ret, corners, ids = cv2.aruco.interpolateCornersCharuco(marker_corners,marker_ids,image, self._board, minMarkers = 1)
             return ret, corners, ids, marker_corners, marker_ids
         else:
             return None, None, None, None, None
@@ -771,7 +763,7 @@ class StereoCalibration(object):
         return errs 
     
     def charuco_ids_to_objpoints(self, ids):
-        one_pts = self.board.chessboardCorners
+        one_pts = self._board.chessboardCorners
         objpts = []
         for j in range(len(ids)):   
             objpts.append(one_pts[ids[j]])
@@ -904,7 +896,7 @@ class StereoCalibration(object):
             # print(im)
             img = cv2.imread(im)
             # h, w = img.shape[:2]
-            if self.cameraModel == 'perspective':
+            if self._cameraModel == 'perspective':
                 kScaled, _ = cv2.getOptimalNewCameraMatrix(K, D, img_size, 0)
                 # print(f'K scaled is \n {kScaled} and size is \n {img_size}')
                 # print(f'D Value is \n {D}')
@@ -928,7 +920,7 @@ class StereoCalibration(object):
             corners = allCorners[i]
             ids = allIds[i]
             objpts = self.charuco_ids_to_objpoints(ids)
-            if self.cameraModel == "fisheye":
+            if self._cameraModel == "fisheye":
                 errs = self.compute_reprojection_errors(objpts, corners, camera_matrix, distortion_coefficients, rotation_vectors[i], translation_vectors[i], fisheye = True)
             else:
                 errs = self.compute_reprojection_errors(objpts, corners, camera_matrix, distortion_coefficients, rotation_vectors[i], translation_vectors[i])
@@ -1036,7 +1028,7 @@ class StereoCalibration(object):
                      perViewErrors) = cv2.aruco.calibrateCameraCharucoExtended(
                         charucoCorners=filtered_corners,
                         charucoIds=filtered_ids,
-                        board=self.board,
+                        board=self._board,
                         imageSize=imsize,
                         cameraMatrix=cameraMatrixInit,
                         distCoeffs=distCoeffsInit,
@@ -1058,7 +1050,7 @@ class StereoCalibration(object):
         return ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, filtered_ids, filtered_corners, allCorners, allIds
 
     def calibrate_fisheye(self, allCorners, allIds, imsize, hfov, name):
-        one_pts = self.board.chessboardCorners
+        one_pts = self._board.chessboardCorners
         obj_points = []
         for i in range(len(allIds)):
             obj_points.append(self.charuco_ids_to_objpoints(allIds[i]))
@@ -1144,7 +1136,7 @@ class StereoCalibration(object):
         right_corners_sampled = []
         left_ids_sampled = []
         obj_pts = []
-        one_pts = self.board.chessboardCorners
+        one_pts = self._board.chessboardCorners
 
         for i in range(len(allIds_l)):
             left_sub_corners = []
@@ -1219,7 +1211,7 @@ class StereoCalibration(object):
                 return [ret, R, T, R_l, R_r, P_l, P_r]
             #### ADD OTHER CALIBRATION METHODS ###
         else:
-            if self.cameraModel == 'perspective':
+            if self._cameraModel == 'perspective':
                 flags = 0
                 # flags |= cv2.CALIB_USE_EXTRINSIC_GUESS
                 # print(flags)
@@ -1252,7 +1244,7 @@ class StereoCalibration(object):
                 r_euler = Rotation.from_matrix(R_r).as_euler('xyz', degrees=True)
 
                 return [ret, R, T, R_l, R_r, P_l, P_r]
-            elif self.cameraModel == 'fisheye':
+            elif self._cameraModel == 'fisheye':
                 # make sure all images have the same *number of* points
                 min_num_points = min([len(pts) for pts in obj_pts])
                 obj_pts_truncated = [pts[:min_num_points] for pts in obj_pts]
@@ -1357,7 +1349,7 @@ class StereoCalibration(object):
             return img
     
     def sgdEpipolar(self, images_left, images_right, M_lp, d_l, M_rp, d_r, r_l, r_r, kScaledL, kScaledR, scaled_res, isHorizontal):
-        if self.cameraModel == 'perspective':
+        if self._cameraModel == 'perspective':
             mapx_l, mapy_l = cv2.initUndistortRectifyMap(
                 M_lp, d_l, r_l, kScaledL, scaled_res[::-1], cv2.CV_32FC1)
             mapx_r, mapy_r = cv2.initUndistortRectifyMap(
@@ -1647,7 +1639,7 @@ class StereoCalibration(object):
         avg_epipolar = epi_error_sum / total_corners
         print("Average Epipolar Error is : " + str(avg_epipolar))
 
-        if self.enable_rectification_disp:
+        if self._enable_rectification_disp:
             self.display_rectification(image_data_pairs, imgpoints_l, imgpoints_r, image_epipolar_color, isHorizontal)
 
         return avg_epipolar
@@ -1658,7 +1650,7 @@ class StereoCalibration(object):
         print("Mesh path")
         print(curr_path)
 
-        if self.cameraModel == "perspective":
+        if self._cameraModel == "perspective":
             map_x_l, map_y_l = cv2.initUndistortRectifyMap(
                 self.M1, self.d1, self.R1, self.M2, self.img_shape, cv2.CV_32FC1)
             map_x_r, map_y_r = cv2.initUndistortRectifyMap(
