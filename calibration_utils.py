@@ -184,7 +184,6 @@ class StereoCalibration(object):
         self.cameraIntrinsics = {}
         self.cameraDistortion = {}
         self.distortion_model = {}
-        self.calib_model = {}
         self.errors = {}
         self._enable_rectification_disp = True
         self._cameraModel = camera_model
@@ -202,6 +201,7 @@ class StereoCalibration(object):
         combinedCoverageImage = None
         resizeWidth, resizeHeight = 1280, 800
         assert mrk_size != None,  "ERROR: marker size not set"
+        calibModels = {} # Still needs to be passed to stereo calibration
         for camera in board_config['cameras'].keys():
             cam_info = board_config['cameras'][camera]
             self.id = cam_info["name"]
@@ -228,14 +228,15 @@ class StereoCalibration(object):
                 self.cameraModel_ccm, self.model_ccm = cam_info["calib_model"].split("_")
                 if self.cameraModel_ccm == "fisheye":
                     self.model_ccm == None
-                self.calib_model[cam_info["name"]] = self.cameraModel_ccm
+                calib_model = self.cameraModel_ccm
                 self.distortion_model[cam_info["name"]] = self.model_ccm
             else:
-                self.calib_model[cam_info["name"]] = self._cameraModel
+                calib_model = self._cameraModel
                 if cam_info["name"] in self.ccm_model:
                     self.distortion_model[cam_info["name"]] = self.ccm_model[cam_info["name"]]
                 else:
                     self.distortion_model[cam_info["name"]] = self.model
+            calibModels[cam_info['name']] = calib_model
 
 
             features = None
@@ -290,7 +291,7 @@ class StereoCalibration(object):
                 cam_info['filtered_ids'] = filtered_ids
                 cam_info['filtered_corners'] = filtered_features
 
-                ret, intrinsics, dist_coeff, _, _, filtered_ids, filtered_corners, size, coverageImage, all_corners, all_ids = self.calibrate_wf_intrinsics(cam_info["name"], all_features, all_ids, filtered_features, filtered_ids, cam_info["imsize"], cam_info["hfov"], features, filtered_images, charucos)
+                ret, intrinsics, dist_coeff, _, _, filtered_ids, filtered_corners, size, coverageImage, all_corners, all_ids = self.calibrate_wf_intrinsics(cam_info["name"], all_features, all_ids, filtered_features, filtered_ids, cam_info["imsize"], cam_info["hfov"], features, filtered_images, charucos, calib_model)
                 if isinstance(ret, str) and all_ids is None:
                     if cam_info["name"] not in self.errors.keys():
                         self.errors[cam_info["name"]] = []
@@ -298,7 +299,7 @@ class StereoCalibration(object):
                     continue
             else:
                 ret, intrinsics, dist_coeff, _, _, filtered_ids, filtered_corners, size, coverageImage, all_corners, all_ids = self.calibrate_intrinsics(
-                    images_path, cam_info['hfov'], cam_info["name"], charucos, width, height)
+                    images_path, cam_info['hfov'], cam_info["name"], charucos, width, height, calib_model)
                 cam_info['filtered_ids'] = filtered_ids
                 cam_info['filtered_corners'] = filtered_corners
             self.cameraIntrinsics[cam_info["name"]] = intrinsics
@@ -381,7 +382,7 @@ class StereoCalibration(object):
                                     removed_features, right_cam_info['filtered_corners'], right_cam_info['filtered_ids'] = self.filtering_features(right_cam_info['filtered_corners'], right_cam_info['filtered_ids'], right_cam_info["name"], right_cam_info["imsize"], right_cam_info["hfov"], self.cameraIntrinsics["name"], self.cameraDistortion["name"])
                             
                             extrinsics = self.calibrate_stereo(left_cam_info['name'], right_cam_info['name'], left_cam_info['filtered_ids'], left_cam_info['filtered_corners'], right_cam_info['filtered_ids'], right_cam_info['filtered_corners'], left_cam_info['intrinsics'], left_cam_info[
-                                                                   'dist_coeff'], right_cam_info['intrinsics'], right_cam_info['dist_coeff'], translation, rotation, features)
+                                                                   'dist_coeff'], right_cam_info['intrinsics'], right_cam_info['dist_coeff'], translation, rotation, features, calibModels[left_cam_info['name']], calibModels[right_cam_info['name']])
                             if extrinsics[0] == -1:
                                 return -1, extrinsics[1]
     
@@ -426,7 +427,9 @@ class StereoCalibration(object):
                                                         right_cam_info['dist_coeff'], 
                                                         extrinsics[2], # Translation between left and right Cameras
                                                         extrinsics[3], # Left Rectification rotation 
-                                                        extrinsics[4]) # Right Rectification rotation"""
+                                                        extrinsics[4], # Right Rectification rotation
+                                                        calibModels[left_cam_info['name']], calibModels[right_cam_info['name']]
+                                                        )"""
                                                                                             
     
                             left_cam_info['extrinsics']['rotation_matrix'] = extrinsics[1]
@@ -608,13 +611,13 @@ class StereoCalibration(object):
             flags = self.distortion_model[name]
         return flags
 
-    def calibrate_wf_intrinsics(self, name, all_Features, all_features_Ids, allCorners, allIds, imsize, hfov, features, image_files, charucos):
+    def calibrate_wf_intrinsics(self, name, all_Features, all_features_Ids, allCorners, allIds, imsize, hfov, features, image_files, charucos, calib_model):
         image_files = glob.glob(image_files + "/*")
         image_files.sort()
         coverageImage = np.ones(imsize[::-1], np.uint8) * 255
         coverageImage = cv2.cvtColor(coverageImage, cv2.COLOR_GRAY2BGR)
         coverageImage = self.draw_corners(allCorners, coverageImage)
-        if self.calib_model[name] == 'perspective':
+        if calib_model == 'perspective':
             if features == None or features == "charucos":
                 distortion_flags = self.get_distortion_flags(name)
                 ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, filtered_ids, filtered_corners, allCorners, allIds  = self.calibrate_camera_charuco(
@@ -834,7 +837,7 @@ class StereoCalibration(object):
         # imsize = gray.shape[::-1]
         return allCorners, allIds, all_marker_corners, all_marker_ids, gray.shape[::-1], all_recovered
 
-    def calibrate_intrinsics(self, image_files, hfov, name, charucos, width, height):
+    def calibrate_intrinsics(self, image_files, hfov, name, charucos, width, height, calib_model):
         image_files = glob.glob(image_files + "/*")
         image_files.sort()
         assert len(
@@ -853,7 +856,7 @@ class StereoCalibration(object):
         coverageImage = np.ones(imsize[::-1], np.uint8) * 255
         coverageImage = cv2.cvtColor(coverageImage, cv2.COLOR_GRAY2BGR)
         coverageImage = self.draw_corners(allCorners, coverageImage)
-        if self.calib_model[name] == 'perspective':
+        if calib_model == 'perspective':
             distortion_flags = self.get_distortion_flags(name)
             ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, filtered_ids, filtered_corners, allCorners, allIds  = self.calibrate_camera_charuco(
                 allCorners, allIds, imsize, hfov, name, distortion_flags)
@@ -1129,7 +1132,7 @@ class StereoCalibration(object):
         return res, K, d, rvecs, tvecs, filtered_ids, filtered_corners
 
 
-    def calibrate_stereo(self, left_name, right_name, allIds_l, allCorners_l, allIds_r, allCorners_r, cameraMatrix_l, distCoeff_l, cameraMatrix_r, distCoeff_r, t_in, r_in, features = None):
+    def calibrate_stereo(self, left_name, right_name, allIds_l, allCorners_l, allIds_r, allCorners_r, cameraMatrix_l, distCoeff_l, cameraMatrix_r, distCoeff_r, t_in, r_in, left_calib_model, right_calib_model, features = None):
         left_corners_sampled = []
         right_corners_sampled = []
         left_ids_sampled = []
@@ -1163,7 +1166,7 @@ class StereoCalibration(object):
                                 cv2.TERM_CRITERIA_EPS, 300, 1e-9)
         if per_ccm and extrinsic_per_ccm:
             for i in range(len(left_corners_sampled)):
-                if self.calib_model[left_name] == "perspective":
+                if left_calib_model == "perspective":
                     left_corners_sampled[i] = cv2.undistortPoints(np.array(left_corners_sampled[i]), cameraMatrix_l, distCoeff_l, P=cameraMatrix_l)
                     #left_corners_sampled[i] = cv2.undistortPoints(np.array(left_corners_sampled[i]), cameraMatrix_l, None)
 
@@ -1171,7 +1174,7 @@ class StereoCalibration(object):
                     left_corners_sampled[i] = cv2.fisheye.undistortPoints(np.array(left_corners_sampled[i]), cameraMatrix_l, distCoeff_l, P=cameraMatrix_l)
                     #left_corners_sampled[i] = cv2.fisheye.undistortPoints(np.array(left_corners_sampled[i]), cameraMatrix_l, None)
             for i in range(len(right_corners_sampled)):
-                if self.calib_model[right_name] == "perspective":
+                if right_calib_model == "perspective":
                     right_corners_sampled[i] = cv2.undistortPoints(np.array(right_corners_sampled[i]), cameraMatrix_r, distCoeff_r, P=cameraMatrix_r)
                     #right_corners_sampled[i] = cv2.undistortPoints(np.array(right_corners_sampled[i]), cameraMatrix_r, None)
                 else:
@@ -1450,7 +1453,7 @@ class StereoCalibration(object):
         return avg_epipolar
 
 
-    def test_epipolar_charuco(self, left_name, right_name, left_img_pth, right_img_pth, M_l, d_l, M_r, d_r, t, r_l, r_r):
+    def test_epipolar_charuco(self, left_name, right_name, left_img_pth, right_img_pth, M_l, d_l, M_r, d_r, t, r_l, r_r, left_calib_model, right_calib_model):
         images_left = glob.glob(left_img_pth + '/*.png')
         images_right = glob.glob(right_img_pth + '/*.png')
         images_left.sort()
@@ -1511,14 +1514,14 @@ class StereoCalibration(object):
         movePos = True
 
 
-        print(self.calib_model[left_name], self.calib_model[right_name])
-        if self.calib_model[left_name] == 'perspective':
+        print(left_calib_model, right_calib_model)
+        if left_calib_model == 'perspective':
             mapx_l, mapy_l = cv2.initUndistortRectifyMap(
                 M_lp, d_l, r_l, kScaledL, scaled_res[::-1], cv2.CV_32FC1)
         else:
             mapx_l, mapy_l = cv2.fisheye.initUndistortRectifyMap(
                 M_lp, d_l, r_l, kScaledL, scaled_res[::-1], cv2.CV_32FC1)
-        if self.calib_model[right_name] == "perspective":
+        if right_calib_model == "perspective":
             mapx_r, mapy_r = cv2.initUndistortRectifyMap(
                 M_rp, d_r, r_r, kScaledR, scaled_res[::-1], cv2.CV_32FC1)
         else:
