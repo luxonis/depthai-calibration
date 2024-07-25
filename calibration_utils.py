@@ -423,89 +423,90 @@ class StereoCalibration(object):
         
         for camera in board_config['cameras']:
             left_cam_info = board_config['cameras'][camera]
-            if str(left_cam_info["name"]) not in self.disableCamera:
-                if 'extrinsics' in left_cam_info:
-                    if 'to_cam' in left_cam_info['extrinsics']:
-                        left_cam = camera
-                        right_cam = left_cam_info['extrinsics']['to_cam']
-                        left_path = filepath + '/' + left_cam_info['name']
-    
-                        right_cam_info = board_config['cameras'][left_cam_info['extrinsics']['to_cam']]
-                        if str(right_cam_info["name"]) not in self.disableCamera:
-                            right_path = filepath + '/' + right_cam_info['name']
-                            print('<-------------Extrinsics calibration of {} and {} ------------>'.format(
-                                left_cam_info['name'], right_cam_info['name']))
-    
-                            specTranslation = left_cam_info['extrinsics']['specTranslation']
-                            rot = left_cam_info['extrinsics']['rotation']
-    
-                            translation = np.array(
-                                [specTranslation['x'], specTranslation['y'], specTranslation['z']], dtype=np.float32)
-                            rotation = Rotation.from_euler(
-                                'xyz', [rot['r'], rot['p'], rot['y']], degrees=True).as_matrix().astype(np.float32)
-                            if per_ccm and extrinsic_per_ccm:
-                                if left_cam_info["name"] in self.extrinsic_img or right_cam_info["name"] in self.extrinsic_img:
-                                    if left_cam_info["name"] in self.extrinsic_img:
-                                        array = self.extrinsic_img[left_cam_info["name"]]
-                                    elif right_cam_info["name"] in self.extrinsic_img:
-                                        array = self.extrinsic_img[left_cam_info["name"]]
-                                    left_cam_info['filtered_corners'], left_cam_info['filtered_ids'], filtered_images = self.remove_features(left_cam_info['filtered_corners'], left_cam_info['filtered_ids'], array)
-                                    right_cam_info['filtered_corners'], right_cam_info['filtered_ids'], filtered_images = self.remove_features(right_cam_info['filtered_corners'], right_cam_info['filtered_ids'], array)
-                                    removed_features, left_cam_info['filtered_corners'], left_cam_info['filtered_ids'], _, _ = self.filtering_features(left_cam_info['filtered_corners'], left_cam_info['filtered_ids'], left_cam_info["name"],left_cam_info["imsize"],left_cam_info["hfov"], allCameraIntrinsics[left_cam_info['name']], allCameraDistCoeffs[left_cam_info['name']],  distortionModels[left_cam_info['name']])
-                                    removed_features, right_cam_info['filtered_corners'], right_cam_info['filtered_ids'], _, _ = self.filtering_features(right_cam_info['filtered_corners'], right_cam_info['filtered_ids'], right_cam_info["name"], right_cam_info["imsize"], right_cam_info["hfov"], allCameraIntrinsics[left_cam_info['name']], allCameraDistCoeffs[left_cam_info['name']], distortionModels[right_cam_info['name']])
-                            
-                            extrinsics = self.calibrate_stereo(left_cam_info['name'], right_cam_info['name'], left_cam_info['filtered_ids'], left_cam_info['filtered_corners'], right_cam_info['filtered_ids'], right_cam_info['filtered_corners'], left_cam_info['intrinsics'], left_cam_info['dist_coeff'], right_cam_info['intrinsics'], right_cam_info['dist_coeff'], translation, rotation, calibModels[left_cam_info['name']], calibModels[right_cam_info['name']], distortionModels[left_cam_info['name']], distortionModels[right_cam_info['name']], features)
-                            if extrinsics[0] == -1:
-                                return -1, extrinsics[1]
-    
-                            if board_config['stereo_config']['left_cam'] == left_cam and board_config['stereo_config']['right_cam'] == right_cam:
-                                board_config['stereo_config']['rectification_left'] = extrinsics[3]
-                                board_config['stereo_config']['rectification_right'] = extrinsics[4]
+            if str(left_cam_info["name"]) in self.disableCamera:
+                continue
+            if 'extrinsics' in left_cam_info:
+                if 'to_cam' in left_cam_info['extrinsics']:
+                    left_cam = camera
+                    right_cam = left_cam_info['extrinsics']['to_cam']
+                    left_path = filepath + '/' + left_cam_info['name']
 
-                            elif board_config['stereo_config']['left_cam'] == right_cam and board_config['stereo_config']['right_cam'] == left_cam:
-                                board_config['stereo_config']['rectification_left'] = extrinsics[4]
-                                board_config['stereo_config']['rectification_right'] = extrinsics[3]
-    
-                            """ for stereoObj in board_config['stereo_config']:
-    
-                                if stereoObj['left_cam'] == left_cam and stereoObj['right_cam'] == right_cam and stereoObj['main'] == 1:
-                                    stereoObj['rectification_left'] = extrinsics[3]
-                                    stereoObj['rectification_right'] = extrinsics[4] """
-    
-                            print('<-------------Epipolar error of {} and {} ------------>'.format(
-                                left_cam_info['name'], right_cam_info['name']))
-                            #print(f"dist {left_cam_info['name']}: {left_cam_info['dist_coeff']}")
-                            #print(f"dist {right_cam_info['name']}: {right_cam_info['dist_coeff']}")
-                            if left_cam_info['intrinsics'][0][0] < right_cam_info['intrinsics'][0][0]:
-                                scale = right_cam_info['intrinsics'][0][0]
-                            else:
-                                scale = left_cam_info['intrinsics'][0][0]
-                            if per_ccm and extrinsic_per_ccm:
-                                scale = ((left_cam_info['intrinsics'][0][0]*right_cam_info['intrinsics'][0][0] + left_cam_info['intrinsics'][1][1]*right_cam_info['intrinsics'][1][1])/2)
-                                print(f"Epipolar error {extrinsics[0]*np.sqrt(scale)}")
-                                left_cam_info['extrinsics']['epipolar_error'] = extrinsics[0]*np.sqrt(scale)
-                                left_cam_info['extrinsics']['stereo_error'] = extrinsics[0]*np.sqrt(scale)
-                            else:
-                                print(f"Epipolar error {extrinsics[0]}")
-                                left_cam_info['extrinsics']['epipolar_error'] = extrinsics[0]
-                                left_cam_info['extrinsics']['stereo_error'] = extrinsics[0]
-                            """self.test_epipolar_charuco(left_cam_info['name'], 
-                                                        right_cam_info['name'],
-                                                        left_path, 
-                                                        right_path, 
-                                                        left_cam_info['intrinsics'], 
-                                                        left_cam_info['dist_coeff'], 
-                                                        right_cam_info['intrinsics'], 
-                                                        right_cam_info['dist_coeff'], 
-                                                        extrinsics[2], # Translation between left and right Cameras
-                                                        extrinsics[3], # Left Rectification rotation 
-                                                        extrinsics[4], # Right Rectification rotation
-                                                        calibModels[left_cam_info['name']], calibModels[right_cam_info['name']]
-                                                        )"""
-                                                                                            
-    
-                            left_cam_info['extrinsics']['rotation_matrix'] = extrinsics[1]
-                            left_cam_info['extrinsics']['translation'] = extrinsics[2]
+                    right_cam_info = board_config['cameras'][left_cam_info['extrinsics']['to_cam']]
+                    if str(right_cam_info["name"]) not in self.disableCamera:
+                        right_path = filepath + '/' + right_cam_info['name']
+                        print('<-------------Extrinsics calibration of {} and {} ------------>'.format(
+                            left_cam_info['name'], right_cam_info['name']))
+
+                        specTranslation = left_cam_info['extrinsics']['specTranslation']
+                        rot = left_cam_info['extrinsics']['rotation']
+
+                        translation = np.array(
+                            [specTranslation['x'], specTranslation['y'], specTranslation['z']], dtype=np.float32)
+                        rotation = Rotation.from_euler(
+                            'xyz', [rot['r'], rot['p'], rot['y']], degrees=True).as_matrix().astype(np.float32)
+                        if per_ccm and extrinsic_per_ccm:
+                            if left_cam_info["name"] in self.extrinsic_img or right_cam_info["name"] in self.extrinsic_img:
+                                if left_cam_info["name"] in self.extrinsic_img:
+                                    array = self.extrinsic_img[left_cam_info["name"]]
+                                elif right_cam_info["name"] in self.extrinsic_img:
+                                    array = self.extrinsic_img[left_cam_info["name"]]
+                                left_cam_info['filtered_corners'], left_cam_info['filtered_ids'], filtered_images = self.remove_features(left_cam_info['filtered_corners'], left_cam_info['filtered_ids'], array)
+                                right_cam_info['filtered_corners'], right_cam_info['filtered_ids'], filtered_images = self.remove_features(right_cam_info['filtered_corners'], right_cam_info['filtered_ids'], array)
+                                removed_features, left_cam_info['filtered_corners'], left_cam_info['filtered_ids'], _, _ = self.filtering_features(left_cam_info['filtered_corners'], left_cam_info['filtered_ids'], left_cam_info["name"],left_cam_info["imsize"],left_cam_info["hfov"], allCameraIntrinsics[left_cam_info['name']], allCameraDistCoeffs[left_cam_info['name']],  distortionModels[left_cam_info['name']])
+                                removed_features, right_cam_info['filtered_corners'], right_cam_info['filtered_ids'], _, _ = self.filtering_features(right_cam_info['filtered_corners'], right_cam_info['filtered_ids'], right_cam_info["name"], right_cam_info["imsize"], right_cam_info["hfov"], allCameraIntrinsics[left_cam_info['name']], allCameraDistCoeffs[left_cam_info['name']], distortionModels[right_cam_info['name']])
+                        
+                        extrinsics = self.calibrate_stereo(left_cam_info['name'], right_cam_info['name'], left_cam_info['filtered_ids'], left_cam_info['filtered_corners'], right_cam_info['filtered_ids'], right_cam_info['filtered_corners'], left_cam_info['intrinsics'], left_cam_info['dist_coeff'], right_cam_info['intrinsics'], right_cam_info['dist_coeff'], translation, rotation, calibModels[left_cam_info['name']], calibModels[right_cam_info['name']], distortionModels[left_cam_info['name']], distortionModels[right_cam_info['name']], features)
+                        if extrinsics[0] == -1:
+                            return -1, extrinsics[1]
+
+                        if board_config['stereo_config']['left_cam'] == left_cam and board_config['stereo_config']['right_cam'] == right_cam:
+                            board_config['stereo_config']['rectification_left'] = extrinsics[3]
+                            board_config['stereo_config']['rectification_right'] = extrinsics[4]
+
+                        elif board_config['stereo_config']['left_cam'] == right_cam and board_config['stereo_config']['right_cam'] == left_cam:
+                            board_config['stereo_config']['rectification_left'] = extrinsics[4]
+                            board_config['stereo_config']['rectification_right'] = extrinsics[3]
+
+                        """ for stereoObj in board_config['stereo_config']:
+
+                            if stereoObj['left_cam'] == left_cam and stereoObj['right_cam'] == right_cam and stereoObj['main'] == 1:
+                                stereoObj['rectification_left'] = extrinsics[3]
+                                stereoObj['rectification_right'] = extrinsics[4] """
+
+                        print('<-------------Epipolar error of {} and {} ------------>'.format(
+                            left_cam_info['name'], right_cam_info['name']))
+                        #print(f"dist {left_cam_info['name']}: {left_cam_info['dist_coeff']}")
+                        #print(f"dist {right_cam_info['name']}: {right_cam_info['dist_coeff']}")
+                        if left_cam_info['intrinsics'][0][0] < right_cam_info['intrinsics'][0][0]:
+                            scale = right_cam_info['intrinsics'][0][0]
+                        else:
+                            scale = left_cam_info['intrinsics'][0][0]
+                        if per_ccm and extrinsic_per_ccm:
+                            scale = ((left_cam_info['intrinsics'][0][0]*right_cam_info['intrinsics'][0][0] + left_cam_info['intrinsics'][1][1]*right_cam_info['intrinsics'][1][1])/2)
+                            print(f"Epipolar error {extrinsics[0]*np.sqrt(scale)}")
+                            left_cam_info['extrinsics']['epipolar_error'] = extrinsics[0]*np.sqrt(scale)
+                            left_cam_info['extrinsics']['stereo_error'] = extrinsics[0]*np.sqrt(scale)
+                        else:
+                            print(f"Epipolar error {extrinsics[0]}")
+                            left_cam_info['extrinsics']['epipolar_error'] = extrinsics[0]
+                            left_cam_info['extrinsics']['stereo_error'] = extrinsics[0]
+                        """self.test_epipolar_charuco(left_cam_info['name'], 
+                                                    right_cam_info['name'],
+                                                    left_path, 
+                                                    right_path, 
+                                                    left_cam_info['intrinsics'], 
+                                                    left_cam_info['dist_coeff'], 
+                                                    right_cam_info['intrinsics'], 
+                                                    right_cam_info['dist_coeff'], 
+                                                    extrinsics[2], # Translation between left and right Cameras
+                                                    extrinsics[3], # Left Rectification rotation 
+                                                    extrinsics[4], # Right Rectification rotation
+                                                    calibModels[left_cam_info['name']], calibModels[right_cam_info['name']]
+                                                    )"""
+                                                                                        
+
+                        left_cam_info['extrinsics']['rotation_matrix'] = extrinsics[1]
+                        left_cam_info['extrinsics']['translation'] = extrinsics[2]
     
         return 1, board_config
 
