@@ -150,10 +150,42 @@ class StereoExceptions(Exception):
         Returns a more comprehensive summary of the exception
         """
         return f"'{self.args[0]}' (occured during stage '{self.stage}')"
+def get_and_filter_features(calibration, images_path, width, height, features, charucos, cam_info, intrinsic_img, _cameraModel, distortion_model):
+    all_features, all_ids, imsize = calibration.getting_features(images_path, width, height, features=features, charucos=charucos)
+
+    if isinstance(all_features, str) and all_ids is None:
+        raise RuntimeError(f'Exception {all_features}') # TODO : Handle
+    cam_info["imsize"] = imsize
+
+    f = imsize[0] / (2 * np.tan(np.deg2rad(cam_info["hfov"]/2)))
+    print("INTRINSIC CALIBRATION")
+    cameraIntrinsics = np.array([[f,    0.0,      imsize[0]/2],
+                                 [0.0,     f,      imsize[1]/2],
+                                 [0.0,   0.0,        1.0]])
+
+    distCoeff = np.zeros((12, 1))
+
+    if cam_info["name"] in intrinsic_img:
+        raise RuntimeError('This is broken')
+        all_features, all_ids, filtered_images = calibration.remove_features(filtered_features, filtered_ids, intrinsic_img[cam_info["name"]], image_files)
+    else:
+        filtered_images = images_path
+    current_time = time.time()
+    if _cameraModel != "fisheye":
+        print("Filtering corners")
+        removed_features, filtered_features, filtered_ids, cameraIntrinsics, distCoeff = calibration.filtering_features(all_features, all_ids, cam_info["name"],imsize,cam_info["hfov"], cameraIntrinsics, distCoeff, distortion_model)
+
+        if filtered_features is None:
+            raise RuntimeError('Exception') # TODO : Handle
+
+        print(f"Filtering takes: {time.time()-current_time}")
+    else:
+        filtered_features = all_features
+        filtered_ids = all_ids
+    return filtered_features, filtered_ids, all_features, all_ids, filtered_images, cameraIntrinsics, distCoeff
 
 
-
-def calibrate_outside(calibration, resizeWidth, resizeHeight, combinedCoverageImage, features, filepath, cam_info, calibModels, distortionModels, charucos, allCameraIntrinsics, allCameraDistCoeffs, model, ccm_model, _cameraModel, intrinsic_img):
+def calibrate_outside(calibration, resizeWidth, resizeHeight, combinedCoverageImage, features, filepath, cam_info, calibModels, distortionModels, allCharucos, allCameraIntrinsics, allCameraDistCoeffs, model, ccm_model, _cameraModel, intrinsic_img):
     images_path = filepath + '/' + cam_info['name']
     image_files = glob.glob(images_path + "/*")
     image_files.sort()
@@ -169,6 +201,7 @@ def calibrate_outside(calibration, resizeWidth, resizeHeight, combinedCoverageIm
 
     print(
         '<------------Calibrating {} ------------>'.format(cam_info['name']))
+
     images_path = filepath + '/' + cam_info['name']
     if "calib_model" in cam_info:
         cameraModel_ccm, model_ccm = cam_info["calib_model"].split("_")
@@ -184,56 +217,36 @@ def calibrate_outside(calibration, resizeWidth, resizeHeight, combinedCoverageIm
             distortion_model = model
     calibModels[cam_info['name']] = calib_model
     distortionModels[cam_info['name']] = distortion_model
-    print(distortion_model)
+
+    
 
 
     img_path = glob.glob(images_path + "/*")
-    if charucos == {}:
+    if allCharucos == {}:
         img_path = sorted(img_path, key=lambda x: int(x.split('_')[1]))
     else:
         img_path.sort()
     cam_info["img_path"] = img_path
 
     if per_ccm:
-        all_features, all_ids, imsize = calibration.getting_features(images_path, cam_info["name"], width, height, features=features, charucos=charucos)
-        if isinstance(all_features, str) and all_ids is None:
-            raise RuntimeError(f'Exception {all_features}') # TODO : Handle
-        cam_info["imsize"] = imsize
-
-        f = imsize[0] / (2 * np.tan(np.deg2rad(cam_info["hfov"]/2)))
-        print("INTRINSIC CALIBRATION")
-        cameraIntrinsics = np.array([[f,    0.0,      imsize[0]/2],
-                                     [0.0,     f,      imsize[1]/2],
-                                     [0.0,   0.0,        1.0]])
-
-        distCoeff = np.zeros((12, 1))
-
-        if cam_info["name"] in intrinsic_img:
-            all_features, all_ids, filtered_images = calibration.remove_features(filtered_features, filtered_ids, intrinsic_img[cam_info["name"]], image_files)
-        else:
-            filtered_images = images_path
-        current_time = time.time()
-        if _cameraModel != "fisheye":
-            print("Filtering corners")
-            removed_features, filtered_features, filtered_ids, cameraIntrinsics, distCoeff = calibration.filtering_features(all_features, all_ids, cam_info["name"],imsize,cam_info["hfov"], cameraIntrinsics, distCoeff, distortion_model)
-
-            if filtered_features is None:
-                raise RuntimeError('Exception') # TODO : Handle
-
-            print(f"Filtering takes: {time.time()-current_time}")
-        else:
-            filtered_features = all_features
-            filtered_ids = all_ids
-
+        start = time.time()
+        print('starting getting and filtering')
+        filtered_features, filtered_ids, all_features, all_ids, filtered_images, cameraIntrinsics, distCoeff = get_and_filter_features(calibration, images_path, width, height, features, allCharucos[cam_info["name"]], cam_info, intrinsic_img, _cameraModel, distortion_model)
+        
+        print(f'getting and filtering took {round(time.time() - start, 2)}s')
+        
         cam_info['filtered_ids'] = filtered_ids
         cam_info['filtered_corners'] = filtered_features
 
-        ret, cameraIntrinsics, distCoeff, _, _, filtered_ids, filtered_corners, size, coverageImage, all_corners, all_ids = calibration.calibrate_wf_intrinsics(cam_info["name"], all_features, all_ids, filtered_features, filtered_ids, cam_info["imsize"], cam_info["hfov"], features, filtered_images, charucos, calib_model, distortion_model, cameraIntrinsics, distCoeff)
+        start = time.time()
+        print('starting calibrate_wf')
+        ret, cameraIntrinsics, distCoeff, _, _, filtered_ids, filtered_corners, size, coverageImage, all_corners, all_ids = calibration.calibrate_wf_intrinsics(cam_info["name"], all_features, all_ids, filtered_features, filtered_ids, cam_info["imsize"], cam_info["hfov"], features, filtered_images, allCharucos, calib_model, distortion_model, cameraIntrinsics, distCoeff)
         if isinstance(ret, str) and all_ids is None:
             raise RuntimeError('Exception' + ret) # TODO : Handle
+        print(f'calibrate_wf took {round(time.time() - start, 2)}s')
     else:
         ret, cameraIntrinsics, distCoeff, _, _, filtered_ids, filtered_corners, size, coverageImage, all_corners, all_ids = calibration.calibrate_intrinsics(
-            images_path, cam_info['hfov'], cam_info["name"], charucos, width, height, calib_model, distortion_model)
+            images_path, cam_info['hfov'], cam_info["name"], allCharucos, width, height, calib_model, distortion_model)
         cam_info['filtered_ids'] = filtered_ids
         cam_info['filtered_corners'] = filtered_corners
     allCameraIntrinsics[cam_info["name"]] = cameraIntrinsics
@@ -432,23 +445,23 @@ class StereoCalibration(object):
     
         return 1, board_config
 
-    def getting_features(self, img_path, name, width, height, features = None, charucos=None):
-        if charucos != {}:
+    def getting_features(self, img_path, width, height, features = None, charucos=None):
+        if charucos:
             allCorners = []
             allIds = []
-            for index, charuco_img in enumerate(charucos[name]):
-                ids, charucos = charuco_img
-                allCorners.append(charucos)
+            for index, charuco_img in enumerate(charucos):
+                ids, charuco = charuco_img
+                allCorners.append(charuco)
                 allIds.append(ids)
             imsize = (width, height)
             return allCorners, allIds, imsize
 
         elif features == None or features == "charucos":
-            allCorners, allIds, _, _, imsize, _ = self.analyze_charuco(self.img_path)
+            allCorners, allIds, _, _, imsize, _ = self.analyze_charuco(img_path)
             return allCorners, allIds, imsize
 
         if features == "checker_board":
-            allCorners, allIds, _, _, imsize, _ = self.analyze_charuco(self.img_path)
+            allCorners, allIds, _, _, imsize, _ = self.analyze_charuco(img_path)
             return allCorners, allIds, imsize
         ###### ADD HERE WHAT IT IS NEEDED ######
 
