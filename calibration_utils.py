@@ -236,10 +236,12 @@ class StereoCalibration(object):
                 print(
                     '<------------Calibrating {} ------------>'.format(cam_info['name']))
                 images_path = filepath + '/' + cam_info['name']
+                distCoeffsInit = np.zeros((12, 1))
                 if "calib_model" in cam_info.keys():
                     self.cameraModel_ccm, self.model_ccm = cam_info["calib_model"].split("_")
                     if self.cameraModel_ccm == "fisheye":
                         self.model_ccm == None
+                        distCoeffsInit = np.zeros((4, 1))
                     self.calib_model[cam_info["name"]] = self.cameraModel_ccm
                     self.distortion_model[cam_info["name"]] = self.model_ccm
                 else:
@@ -279,7 +281,6 @@ class StereoCalibration(object):
                         print(
                             f'Camera Matrix initialization with HFOV of {cam_info["name"]} is.............')
                         print(cameraMatrixInit)
-                    distCoeffsInit = np.zeros((12, 1))
                     if cam_info["name"] not in self.cameraDistortion:
                         self.cameraDistortion[cam_info["name"]] = distCoeffsInit
 
@@ -703,7 +704,10 @@ class StereoCalibration(object):
             if ids is not None and corners.size > 0:
                 ids = ids.flatten()  # Flatten the IDs from 2D to 1D
                 objPoints = np.array([self.board.chessboardCorners[id] for id in ids], dtype=np.float32)
-                imgpoints2, _ = cv2.projectPoints(objPoints, rvecs[i], tvecs[i], cameraMatrix, distCoeffs)
+                if self.calib_model[camera] == "perspective":
+                    imgpoints2, _ = cv2.projectPoints(objPoints, rvecs[i], tvecs[i], cameraMatrix, distCoeffs)
+                else:
+                    imgpoints2, _ = cv2.fisheye.projectPoints(objPoints[None], rvecs[i], tvecs[i], cameraMatrix, distCoeffs)
                 corners2 = corners.reshape(-1, 2)
                 imgpoints2 = imgpoints2.reshape(-1, 2)
 
@@ -785,7 +789,7 @@ class StereoCalibration(object):
                 ax.scatter(np.array(corners2[removed_mask]).T[0], np.array(corners2[removed_mask]).T[1], label = "Original", alpha = 0.5, color = "Black")
                 img = ax.scatter(np.array(imgpoints2[removed_mask]).T[0], np.array(imgpoints2[removed_mask]).T[1], c=errors[removed_mask], cmap = GnRd, label = "Reprojected", vmin=0, vmax=max(errors[removed_mask]))
                 ax.imshow(frame, alpha = 0.5)
-                ax.plot([],[], label = f"Rerprojection Remade: {round(np.mean(errors[removed_mask]), 4)}", color = "white")
+                ax.plot([],[], label = f"Rerprojection Remade: {round(np.mean(errors), 4)}", color = "white")
                 ax.plot([],[], label = f"Whole Rerprojection OpenCV: {round(reprojection, 4)}", color = "white")
                 cbar = plt.colorbar(img, ax=ax)
                 cbar.set_label("Reprojection error")
@@ -934,12 +938,17 @@ class StereoCalibration(object):
             imgpoints2 = np.array([imgpoints2[id[0]] for id in objects])
 
             ret, rvec, tvec = cv2.solvePnP(imgpoints2, all_corners, K, d)
-            imgpoints2, _ = cv2.projectPoints(imgpoints2, rvec, tvec, self.cameraIntrinsics[self.name], self.cameraDistortion[self.name])
+            if self.calib_model[self.name] == "perspective":
+                imgpoints2, _ = cv2.projectPoints(imgpoints2, rvec, tvec, self.cameraIntrinsics[self.name], self.cameraDistortion[self.name])
+            else:
+                imgpoints2, _ = cv2.projectPoints(imgpoints2, rvec, tvec, self.cameraIntrinsics[self.name], self.cameraDistortion[self.name])
             
             ini_threshold += threshold_stepper
             index += 1
         if self.traceLevel == 13:
             image = cv2.imread(self.img_path[self.index])
+            if len(image.shape) == 3:
+                image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
             plt.title(f"Number of rejected corners in filtering, iterations needed: {ini_threshold}, inliers: {round(len(objects)/len(corners[:,0,0]), 4) *100} %")
             plt.imshow(image)
             plt.scatter(corners[:,0,0],corners[:,0,1], marker= "o", label = f"Detected all corners: {len(corners[:,0,0])}", color = "Red")
@@ -1280,7 +1289,7 @@ class StereoCalibration(object):
                         flags=flags,
                         criteria=(cv2.TERM_CRITERIA_EPS & cv2.TERM_CRITERIA_COUNT, 50000, 1e-9))
                 except:
-                    raise StereoExceptions(message="Intrisic calibration failed", stage="intrinsic_calibration", element=name, id=self.id)
+                    return ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, filtered_ids, filtered_corners, allCorners, allIds
                 cameraMatrixInit = camera_matrix
                 distCoeffsInit = distortion_coefficients
                 threshold = 5 * imsize[1]/800.0
@@ -1375,12 +1384,14 @@ class StereoCalibration(object):
          # check if there are any suspicious corners with high reprojection error
         rvecs = []
         tvecs = []
+        self.index = 0
         for corners, ids in zip(allCorners, allIds):
             objpts = self.charuco_ids_to_objpoints(ids)
-            corners_undist = cv2.fisheye.undistortPoints(corners, cameraMatrixInit, distCoeffsInit)
+            corners_undist = cv2.fisheye.undistortPoints(corners, cameraMatrixInit, distCoeffsInit, None, np.eye(3))
             rvec, tvec, new_ids = self.camera_pose_charuco(objpts, corners_undist,ids, np.eye(3), np.array((0.0,0,0,0)))
             tvecs.append(tvec)
             rvecs.append(rvec)
+            self.index +=1 
         corners_removed, filtered_ids, filtered_corners = self.filter_corner_outliers(allIds, allCorners, cameraMatrixInit, distCoeffsInit, rvecs, tvecs)
         if corners_removed:
             obj_points = []
@@ -1438,7 +1449,7 @@ class StereoCalibration(object):
                     res, K, d, rvecs, tvecs =  cv2.fisheye.calibrate(obj_points, filtered_corners, imsize, K, distCoeffsInit, flags=flags, criteria=term_criteria) 
                 except:
                     print(f"Failed the full res calib, using calibration with crop factor {crop}")
-        
+        filtered_corners, filtered_ids,all_error, removed_corners, removed_ids, removed_error = self.features_filtering_function(rvecs, tvecs, K, d, res, allCorners, allIds, camera = name, threshold=1)
         return res, K, d, rvecs, tvecs, filtered_ids, filtered_corners
 
 
