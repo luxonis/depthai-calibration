@@ -201,29 +201,26 @@ class StereoCalibration(object):
         # parameters = aruco.DetectorParameters_create()
         combinedCoverageImage = None
         resizeWidth, resizeHeight = 1280, 800
-        self.height = {}
-        self.width = {}
         assert mrk_size != None,  "ERROR: marker size not set"
-        for camera in board_config['cameras'].keys():
-            cam_info = board_config['cameras'][camera]
-            if cam_info["name"] not in self.disableCamera:
-                images_path = filepath + '/' + cam_info['name']
-                image_files = glob.glob(images_path + "/*")
-                image_files.sort()
-                for im in image_files:
-                    frame = cv2.imread(im)
-                    self.height[cam_info["name"]], self.width[cam_info["name"]], _ = frame.shape
-                    widthRatio = resizeWidth / self.width[cam_info["name"]]
-                    heightRatio = resizeHeight / self.height[cam_info["name"]]
-                    if (widthRatio > 0.8 and heightRatio > 0.8 and widthRatio <= 1.0 and heightRatio <= 1.0) or (widthRatio > 1.2 and heightRatio > 1.2) or (resizeHeight == 0):
-                        resizeWidth = self.width[cam_info["name"]]
-                        resizeHeight = self.height[cam_info["name"]]
-                    break
         for camera in board_config['cameras'].keys():
             cam_info = board_config['cameras'][camera]
             self.id = cam_info["name"]
             if cam_info["name"] in self.disableCamera:
                 continue
+
+            images_path = filepath + '/' + cam_info['name']
+            image_files = glob.glob(images_path + "/*")
+            image_files.sort()
+            for im in image_files:
+                frame = cv2.imread(im)
+                height, width, _ = frame.shape
+                widthRatio = resizeWidth / width
+                heightRatio = resizeHeight / height
+                if (widthRatio > 0.8 and heightRatio > 0.8 and widthRatio <= 1.0 and heightRatio <= 1.0) or (widthRatio > 1.2 and heightRatio > 1.2) or (resizeHeight == 0):
+                    resizeWidth = width
+                    resizeHeight = height
+                break
+
             print(
                 '<------------Calibrating {} ------------>'.format(cam_info['name']))
             images_path = filepath + '/' + cam_info['name']
@@ -250,7 +247,7 @@ class StereoCalibration(object):
             cam_info["img_path"] = self.img_path
             self.name = cam_info["name"]
             if per_ccm:
-                all_features, all_ids, imsize = self.getting_features(images_path, cam_info["name"], features=features, charucos=charucos)
+                all_features, all_ids, imsize = self.getting_features(images_path, cam_info["name"], width, height, features=features, charucos=charucos)
                 if isinstance(all_features, str) and all_ids is None:
                     if cam_info["name"] not in self.errors.keys():
                         self.errors[cam_info["name"]] = []
@@ -301,7 +298,7 @@ class StereoCalibration(object):
                     continue
             else:
                 ret, intrinsics, dist_coeff, _, _, filtered_ids, filtered_corners, size, coverageImage, all_corners, all_ids = self.calibrate_intrinsics(
-                    images_path, cam_info['hfov'], cam_info["name"], charucos)
+                    images_path, cam_info['hfov'], cam_info["name"], charucos, width, height)
                 cam_info['filtered_ids'] = filtered_ids
                 cam_info['filtered_corners'] = filtered_corners
             self.cameraIntrinsics[cam_info["name"]] = intrinsics
@@ -437,7 +434,7 @@ class StereoCalibration(object):
     
         return 1, board_config
 
-    def getting_features(self, img_path, name, features = None, charucos=None):
+    def getting_features(self, img_path, name, width, height, features = None, charucos=None):
         if charucos != {}:
             allCorners = []
             allIds = []
@@ -445,7 +442,7 @@ class StereoCalibration(object):
                 ids, charucos = charuco_img
                 allCorners.append(charucos)
                 allIds.append(ids)
-            imsize = (self.width[name], self.height[name])
+            imsize = (width, height)
             return allCorners, allIds, imsize
 
         elif features == None or features == "charucos":
@@ -837,7 +834,7 @@ class StereoCalibration(object):
         # imsize = gray.shape[::-1]
         return allCorners, allIds, all_marker_corners, all_marker_ids, gray.shape[::-1], all_recovered
 
-    def calibrate_intrinsics(self, image_files, hfov, name, charucos):
+    def calibrate_intrinsics(self, image_files, hfov, name, charucos, width, height):
         image_files = glob.glob(image_files + "/*")
         image_files.sort()
         assert len(
@@ -851,7 +848,7 @@ class StereoCalibration(object):
                 ids, charucos = charuco_img
                 allCorners.append(charucos)
                 allIds.append(ids)
-            imsize = (self.height[name], self.width[name])
+            imsize = (height, width)
 
         coverageImage = np.ones(imsize[::-1], np.uint8) * 255
         coverageImage = cv2.cvtColor(coverageImage, cv2.COLOR_GRAY2BGR)
