@@ -152,6 +152,127 @@ class StereoExceptions(Exception):
         return f"'{self.args[0]}' (occured during stage '{self.stage}')"
 
 
+
+def calibrate_outside(calibration, resizeWidth, resizeHeight, combinedCoverageImage, features, filepath, cam_info, calibModels, distortionModels, charucos, allCameraIntrinsics, allCameraDistCoeffs, model, ccm_model, _cameraModel, intrinsic_img):
+    images_path = filepath + '/' + cam_info['name']
+    image_files = glob.glob(images_path + "/*")
+    image_files.sort()
+    for im in image_files:
+        frame = cv2.imread(im)
+        height, width, _ = frame.shape
+        widthRatio = resizeWidth / width
+        heightRatio = resizeHeight / height
+        if (widthRatio > 0.8 and heightRatio > 0.8 and widthRatio <= 1.0 and heightRatio <= 1.0) or (widthRatio > 1.2 and heightRatio > 1.2) or (resizeHeight == 0):
+            resizeWidth = width
+            resizeHeight = height
+        break
+
+    print(
+        '<------------Calibrating {} ------------>'.format(cam_info['name']))
+    images_path = filepath + '/' + cam_info['name']
+    if "calib_model" in cam_info:
+        cameraModel_ccm, model_ccm = cam_info["calib_model"].split("_")
+        if cameraModel_ccm == "fisheye":
+            model_ccm == None
+        calib_model = cameraModel_ccm
+        distortion_model = model_ccm
+    else:
+        calib_model = _cameraModel
+        if cam_info["name"] in ccm_model:
+            distortion_model = ccm_model[cam_info["name"]]
+        else:
+            distortion_model = model
+    calibModels[cam_info['name']] = calib_model
+    distortionModels[cam_info['name']] = distortion_model
+    print(distortion_model)
+
+
+    img_path = glob.glob(images_path + "/*")
+    if charucos == {}:
+        img_path = sorted(img_path, key=lambda x: int(x.split('_')[1]))
+    else:
+        img_path.sort()
+    cam_info["img_path"] = img_path
+
+    if per_ccm:
+        all_features, all_ids, imsize = calibration.getting_features(images_path, cam_info["name"], width, height, features=features, charucos=charucos)
+        if isinstance(all_features, str) and all_ids is None:
+            raise RuntimeError(f'Exception {all_features}') # TODO : Handle
+        cam_info["imsize"] = imsize
+
+        f = imsize[0] / (2 * np.tan(np.deg2rad(cam_info["hfov"]/2)))
+        print("INTRINSIC CALIBRATION")
+        cameraIntrinsics = np.array([[f,    0.0,      imsize[0]/2],
+                                     [0.0,     f,      imsize[1]/2],
+                                     [0.0,   0.0,        1.0]])
+
+        distCoeff = np.zeros((12, 1))
+
+        if cam_info["name"] in intrinsic_img:
+            all_features, all_ids, filtered_images = calibration.remove_features(filtered_features, filtered_ids, intrinsic_img[cam_info["name"]], image_files)
+        else:
+            filtered_images = images_path
+        current_time = time.time()
+        if _cameraModel != "fisheye":
+            print("Filtering corners")
+            removed_features, filtered_features, filtered_ids, cameraIntrinsics, distCoeff = calibration.filtering_features(all_features, all_ids, cam_info["name"],imsize,cam_info["hfov"], cameraIntrinsics, distCoeff, distortion_model)
+
+            if filtered_features is None:
+                raise RuntimeError('Exception') # TODO : Handle
+
+            print(f"Filtering takes: {time.time()-current_time}")
+        else:
+            filtered_features = all_features
+            filtered_ids = all_ids
+
+        cam_info['filtered_ids'] = filtered_ids
+        cam_info['filtered_corners'] = filtered_features
+
+        ret, cameraIntrinsics, distCoeff, _, _, filtered_ids, filtered_corners, size, coverageImage, all_corners, all_ids = calibration.calibrate_wf_intrinsics(cam_info["name"], all_features, all_ids, filtered_features, filtered_ids, cam_info["imsize"], cam_info["hfov"], features, filtered_images, charucos, calib_model, distortion_model, cameraIntrinsics, distCoeff)
+        if isinstance(ret, str) and all_ids is None:
+            raise RuntimeError('Exception' + ret) # TODO : Handle
+    else:
+        ret, cameraIntrinsics, distCoeff, _, _, filtered_ids, filtered_corners, size, coverageImage, all_corners, all_ids = calibration.calibrate_intrinsics(
+            images_path, cam_info['hfov'], cam_info["name"], charucos, width, height, calib_model, distortion_model)
+        cam_info['filtered_ids'] = filtered_ids
+        cam_info['filtered_corners'] = filtered_corners
+    allCameraIntrinsics[cam_info["name"]] = cameraIntrinsics
+    allCameraDistCoeffs[cam_info["name"]] = distCoeff
+    cam_info['intrinsics'] = cameraIntrinsics
+    cam_info['dist_coeff'] = distCoeff
+    cam_info['size'] = size # (Width, height)
+    cam_info['reprojection_error'] = ret
+    print("Reprojection error of {0}: {1}".format(
+        cam_info['name'], ret))
+    
+    coverage_name = cam_info['name']
+    print_text = f'Coverage Image of {coverage_name} with reprojection error of {round(ret,5)}'
+    height, width, _ = coverageImage.shape
+
+    if width > resizeWidth and height > resizeHeight:
+        coverageImage = cv2.resize(
+        coverageImage, (0, 0), fx= resizeWidth / width, fy= resizeWidth / width)
+
+    height, width, _ = coverageImage.shape
+    if height > resizeHeight:
+        height_offset = (height - resizeHeight)//2
+        coverageImage = coverageImage[height_offset:height_offset+resizeHeight, :]
+    
+    height, width, _ = coverageImage.shape
+    height_offset = (resizeHeight - height)//2
+    width_offset = (resizeWidth - width)//2
+    subImage = np.pad(coverageImage, ((height_offset, height_offset), (width_offset, width_offset), (0, 0)), 'constant', constant_values=0)
+    cv2.putText(subImage, print_text, (50, 50+height_offset), cv2.FONT_HERSHEY_SIMPLEX, 2*coverageImage.shape[0]/1750, (0, 0, 0), 2)
+    if combinedCoverageImage is None:
+        combinedCoverageImage = subImage
+    else:
+        combinedCoverageImage = np.hstack((combinedCoverageImage, subImage))
+    coverage_file_path = filepath + '/' + coverage_name + '_coverage.png'
+    
+    cv2.imwrite(coverage_file_path, subImage)
+    return combinedCoverageImage
+
+
 class StereoCalibration(object):
     """Class to Calculate Calibration and Rectify a Stereo Camera."""
 
@@ -195,146 +316,22 @@ class StereoCalibration(object):
 
         self.cams = []
         # parameters = aruco.DetectorParameters_create()
-        combinedCoverageImage = None
+        combinedCoverageImage = None # TODO : It might not actually be combined in the calibration loop
         resizeWidth, resizeHeight = 1280, 800
         assert mrk_size != None,  "ERROR: marker size not set"
         calibModels = {} # Still needs to be passed to stereo calibration
         distortionModels = {} # Still needs to be passed to stereo calibration
         allCameraIntrinsics = {} # Still needs to be passed to stereo calibration
         allCameraDistCoeffs = {} # Still needs to be passed to stereo calibration
+        features = None
 
         for camera in board_config['cameras']:
             cam_info = board_config['cameras'][camera]
             self.id = cam_info["name"]
             if cam_info["name"] in self.disableCamera:
                 continue
+            combinedCoverageImage = calibrate_outside(self, resizeWidth, resizeHeight, combinedCoverageImage, features, filepath, cam_info, calibModels, distortionModels, charucos, allCameraIntrinsics, allCameraDistCoeffs, self.model, self.ccm_model, self._cameraModel, self.intrinsic_img)
 
-            images_path = filepath + '/' + cam_info['name']
-            image_files = glob.glob(images_path + "/*")
-            image_files.sort()
-            for im in image_files:
-                frame = cv2.imread(im)
-                height, width, _ = frame.shape
-                widthRatio = resizeWidth / width
-                heightRatio = resizeHeight / height
-                if (widthRatio > 0.8 and heightRatio > 0.8 and widthRatio <= 1.0 and heightRatio <= 1.0) or (widthRatio > 1.2 and heightRatio > 1.2) or (resizeHeight == 0):
-                    resizeWidth = width
-                    resizeHeight = height
-                break
-
-            print(
-                '<------------Calibrating {} ------------>'.format(cam_info['name']))
-            images_path = filepath + '/' + cam_info['name']
-            if "calib_model" in cam_info:
-                self.cameraModel_ccm, self.model_ccm = cam_info["calib_model"].split("_")
-                if self.cameraModel_ccm == "fisheye":
-                    self.model_ccm == None
-                calib_model = self.cameraModel_ccm
-                distortion_model = self.model_ccm
-            else:
-                calib_model = self._cameraModel
-                if cam_info["name"] in self.ccm_model:
-                    distortion_model = self.ccm_model[cam_info["name"]]
-                else:
-                    distortion_model = self.model
-            calibModels[cam_info['name']] = calib_model
-            distortionModels[cam_info['name']] = distortion_model
-            print(distortion_model)
-
-
-            features = None
-            self.img_path = glob.glob(images_path + "/*")
-            if charucos == {}:
-                self.img_path = sorted(self.img_path, key=lambda x: int(x.split('_')[1]))
-            else:
-                self.img_path.sort()
-            cam_info["img_path"] = self.img_path
-            self.name = cam_info["name"]
-            if per_ccm:
-                all_features, all_ids, imsize = self.getting_features(images_path, cam_info["name"], width, height, features=features, charucos=charucos)
-                if isinstance(all_features, str) and all_ids is None:
-                    if cam_info["name"] not in self.errors:
-                        self.errors[cam_info["name"]] = []
-                    self.errors[cam_info["name"]].append(all_features)
-                    continue
-                cam_info["imsize"] = imsize
-
-                f = imsize[0] / (2 * np.tan(np.deg2rad(cam_info["hfov"]/2)))
-                print("INTRINSIC CALIBRATION")
-                cameraIntrinsics = np.array([[f,    0.0,      imsize[0]/2],
-                                             [0.0,     f,      imsize[1]/2],
-                                             [0.0,   0.0,        1.0]])
-
-                distCoeff = np.zeros((12, 1))
-
-                if cam_info["name"] in self.intrinsic_img:
-                    all_features, all_ids, filtered_images = self.remove_features(filtered_features, filtered_ids, self.intrinsic_img[cam_info["name"]], image_files)
-                else:
-                    filtered_images = images_path
-                current_time = time.time()
-                if self._cameraModel != "fisheye":
-                    print("Filtering corners")
-                    removed_features, filtered_features, filtered_ids, cameraIntrinsics, distCoeff = self.filtering_features(all_features, all_ids, cam_info["name"],imsize,cam_info["hfov"], cameraIntrinsics, distCoeff, distortion_model)
-
-                    if filtered_features is None:
-                        if cam_info["name"] not in self.errors:
-                            self.errors[cam_info["name"]] = []
-                        self.errors[cam_info["name"]].append(removed_features)
-                        continue
-
-                    print(f"Filtering takes: {time.time()-current_time}")
-                else:
-                    filtered_features = all_features
-                    filtered_ids = all_ids
-
-                cam_info['filtered_ids'] = filtered_ids
-                cam_info['filtered_corners'] = filtered_features
-
-                ret, cameraIntrinsics, distCoeff, _, _, filtered_ids, filtered_corners, size, coverageImage, all_corners, all_ids = self.calibrate_wf_intrinsics(cam_info["name"], all_features, all_ids, filtered_features, filtered_ids, cam_info["imsize"], cam_info["hfov"], features, filtered_images, charucos, calib_model, distortion_model, cameraIntrinsics, distCoeff)
-                if isinstance(ret, str) and all_ids is None:
-                    if cam_info["name"] not in self.errors:
-                        self.errors[cam_info["name"]] = []
-                    self.errors[cam_info["name"]].append(ret)
-                    continue
-            else:
-                ret, cameraIntrinsics, distCoeff, _, _, filtered_ids, filtered_corners, size, coverageImage, all_corners, all_ids = self.calibrate_intrinsics(
-                    images_path, cam_info['hfov'], cam_info["name"], charucos, width, height, calib_model, distortion_model)
-                cam_info['filtered_ids'] = filtered_ids
-                cam_info['filtered_corners'] = filtered_corners
-            allCameraIntrinsics[cam_info["name"]] = cameraIntrinsics
-            allCameraDistCoeffs[cam_info["name"]] = distCoeff
-            cam_info['intrinsics'] = cameraIntrinsics
-            cam_info['dist_coeff'] = distCoeff
-            cam_info['size'] = size # (Width, height)
-            cam_info['reprojection_error'] = ret
-            print("Reprojection error of {0}: {1}".format(
-                cam_info['name'], ret))
-            
-            coverage_name = cam_info['name']
-            print_text = f'Coverage Image of {coverage_name} with reprojection error of {round(ret,5)}'
-            height, width, _ = coverageImage.shape
-
-            if width > resizeWidth and height > resizeHeight:
-                coverageImage = cv2.resize(
-                coverageImage, (0, 0), fx= resizeWidth / width, fy= resizeWidth / width)
-
-            height, width, _ = coverageImage.shape
-            if height > resizeHeight:
-                height_offset = (height - resizeHeight)//2
-                coverageImage = coverageImage[height_offset:height_offset+resizeHeight, :]
-            
-            height, width, _ = coverageImage.shape
-            height_offset = (resizeHeight - height)//2
-            width_offset = (resizeWidth - width)//2
-            subImage = np.pad(coverageImage, ((height_offset, height_offset), (width_offset, width_offset), (0, 0)), 'constant', constant_values=0)
-            cv2.putText(subImage, print_text, (50, 50+height_offset), cv2.FONT_HERSHEY_SIMPLEX, 2*coverageImage.shape[0]/1750, (0, 0, 0), 2)
-            if combinedCoverageImage is None:
-                combinedCoverageImage = subImage
-            else:
-                combinedCoverageImage = np.hstack((combinedCoverageImage, subImage))
-            coverage_file_path = filepath + '/' + coverage_name + '_coverage.png'
-            
-            cv2.imwrite(coverage_file_path, subImage)
         if self.errors != {}:
             string = ""
             for key in self.errors:
@@ -495,7 +492,7 @@ class StereoCalibration(object):
         for index, corners in enumerate(filtered_corners):
             if len(corners) < 4:
                 corner_detector.remove(corners)
-        if len(corner_detector) < int(len(self.img_path)*0.75):
+        if len(corner_detector) < int(len(allCorners)*0.75):
             return f"More than 1/4 of images has less than 4 corners for {name}", None, None
 
                 
@@ -670,8 +667,7 @@ class StereoCalibration(object):
         display_points = []
         circle_size = 0
         reported_error = []
-        for i, (corners, ids, frame_path) in enumerate(zip(filtered_corners, filtered_id, self.img_path)):
-            frame = cv2.imread(frame_path)
+        for i, (corners, ids) in enumerate(zip(filtered_corners, filtered_id)):
             if ids is not None and corners.size > 0:
                 ids = ids.flatten()  # Flatten the IDs from 2D to 1D
                 objPoints = np.array([self._board.chessboardCorners[id] for id in ids], dtype=np.float32)
