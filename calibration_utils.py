@@ -203,7 +203,7 @@ class StereoCalibration(object):
         allCameraIntrinsics = {} # Still needs to be passed to stereo calibration
         allCameraDistCoeffs = {} # Still needs to be passed to stereo calibration
 
-        for camera in board_config['cameras'].keys():
+        for camera in board_config['cameras']:
             cam_info = board_config['cameras'][camera]
             self.id = cam_info["name"]
             if cam_info["name"] in self.disableCamera:
@@ -225,7 +225,7 @@ class StereoCalibration(object):
             print(
                 '<------------Calibrating {} ------------>'.format(cam_info['name']))
             images_path = filepath + '/' + cam_info['name']
-            if "calib_model" in cam_info.keys():
+            if "calib_model" in cam_info:
                 self.cameraModel_ccm, self.model_ccm = cam_info["calib_model"].split("_")
                 if self.cameraModel_ccm == "fisheye":
                     self.model_ccm == None
@@ -253,7 +253,7 @@ class StereoCalibration(object):
             if per_ccm:
                 all_features, all_ids, imsize = self.getting_features(images_path, cam_info["name"], width, height, features=features, charucos=charucos)
                 if isinstance(all_features, str) and all_ids is None:
-                    if cam_info["name"] not in self.errors.keys():
+                    if cam_info["name"] not in self.errors:
                         self.errors[cam_info["name"]] = []
                     self.errors[cam_info["name"]].append(all_features)
                     continue
@@ -277,7 +277,7 @@ class StereoCalibration(object):
                     removed_features, filtered_features, filtered_ids, cameraIntrinsics, distCoeff = self.filtering_features(all_features, all_ids, cam_info["name"],imsize,cam_info["hfov"], cameraIntrinsics, distCoeff, distortion_model)
 
                     if filtered_features is None:
-                        if cam_info["name"] not in self.errors.keys():
+                        if cam_info["name"] not in self.errors:
                             self.errors[cam_info["name"]] = []
                         self.errors[cam_info["name"]].append(removed_features)
                         continue
@@ -292,7 +292,7 @@ class StereoCalibration(object):
 
                 ret, cameraIntrinsics, distCoeff, _, _, filtered_ids, filtered_corners, size, coverageImage, all_corners, all_ids = self.calibrate_wf_intrinsics(cam_info["name"], all_features, all_ids, filtered_features, filtered_ids, cam_info["imsize"], cam_info["hfov"], features, filtered_images, charucos, calib_model, distortion_model, cameraIntrinsics, distCoeff)
                 if isinstance(ret, str) and all_ids is None:
-                    if cam_info["name"] not in self.errors.keys():
+                    if cam_info["name"] not in self.errors:
                         self.errors[cam_info["name"]] = []
                     self.errors[cam_info["name"]].append(ret)
                     continue
@@ -337,7 +337,7 @@ class StereoCalibration(object):
             cv2.imwrite(coverage_file_path, subImage)
         if self.errors != {}:
             string = ""
-            for key in self.errors.keys():
+            for key in self.errors:
                 string += self.errors[key][0] + "\n"
             raise StereoExceptions(message=string, stage="intrinsic")
 
@@ -347,7 +347,7 @@ class StereoCalibration(object):
             cv2.waitKey(1)
             cv2.destroyAllWindows()
         
-        for camera in board_config['cameras'].keys():
+        for camera in board_config['cameras']:
             left_cam_info = board_config['cameras'][camera]
             if str(left_cam_info["name"]) not in self.disableCamera:
                 if 'extrinsics' in left_cam_info:
@@ -1001,7 +1001,7 @@ class StereoCalibration(object):
                 iterations_array.append(index)
                 reprojection.append(ret)
                 for i in range(len(distortion_coefficients)):
-                    if i not in distortion_array.keys():
+                    if i not in distortion_array:
                         distortion_array[i] = []
                     distortion_array[i].append(distortion_coefficients[i][0])
                 print(f"Each filtering {time.time() - start}")
