@@ -36,6 +36,41 @@ cdict = {'red':  ((0.0, 0.0, 0.0),   # no red at 0
           (0.5, 1.0, 1.0),   # all channels set to 1.0 at 0.5 to create white
           (1.0, 0.0, 0.0))   # no blue at 1
 }
+initial_max_threshold = 15
+initial_min_filtered = 0.05
+calibration_max_threshold = 10
+
+class ProxyDict:
+  def __init__(self, squaresX, squaresY, squareSize, markerSize, dictSize):
+    self.squaresX = squaresX
+    self.squaresY = squaresY
+    self.squareSize = squareSize
+    self.markerSize = markerSize
+    self.dictSize = dictSize
+
+  def __getstate__(self):
+      state = self.__dict__.copy()
+      for hidden in ['_board', '_dictionary']:
+        if hidden in state:
+          del state[hidden]
+      return state
+
+  def __build(self):
+    self._dictionary = aruco.Dictionary_get(self.dictSize)
+    self._board = aruco.CharucoBoard_create(self.squaresX, self.squaresY, self.squareSize, self.markerSize, self._dictionary)
+
+  @property
+  def dictionary(self):
+    if not hasattr(self, '_dictionary'):
+      self.__build()
+    return self._dictionary
+
+  @property
+  def board(self):
+    if not hasattr(self, '_board'):
+      self.__build()
+    return self._board
+
 # Create the colormap using the dictionary
 GnRd = colors.LinearSegmentedColormap('GnRd', cdict)
 def get_quadrant_coordinates(width, height, nx, ny):
@@ -153,153 +188,10 @@ class StereoExceptions(Exception):
         """
         return f"'{self.args[0]}' (occured during stage '{self.stage}')"
 
-def get_and_filter_features(calibration, images_path, width, height, features, charucos, cam_info, intrinsic_img, _cameraModel, distortion_model):
-    all_features, all_ids, imsize = calibration.getting_features(images_path, width, height, features=features, charucos=charucos)
+def estimate_pose_and_filter_single(args):
+    calibration, corners, ids, K, d, min_inliers, max_threshold, threshold_stepper = args
 
-    if isinstance(all_features, str) and all_ids is None:
-        raise RuntimeError(f'Exception {all_features}') # TODO : Handle
-    cam_info["imsize"] = imsize
-
-    f = imsize[0] / (2 * np.tan(np.deg2rad(cam_info["hfov"]/2)))
-    print("INTRINSIC CALIBRATION")
-    cameraIntrinsics = np.array([[f,    0.0,      imsize[0]/2],
-                                 [0.0,     f,      imsize[1]/2],
-                                 [0.0,   0.0,        1.0]])
-
-    distCoeff = np.zeros((12, 1))
-
-    if cam_info["name"] in intrinsic_img:
-        raise RuntimeError('This is broken')
-        all_features, all_ids, filtered_images = calibration.remove_features(filtered_features, filtered_ids, intrinsic_img[cam_info["name"]], image_files)
-    else:
-        filtered_images = images_path
-
-    current_time = time.time()
-    if _cameraModel != "fisheye":
-        print("Filtering corners")
-        removed_features, filtered_features, filtered_ids, cameraIntrinsics, distCoeff = calibration.filtering_features(all_features, all_ids, cam_info["name"],imsize,cam_info["hfov"], cameraIntrinsics, distCoeff, distortion_model)
-
-        if filtered_features is None:
-            raise RuntimeError('Exception') # TODO : Handle
-
-        print(f"Filtering takes: {time.time()-current_time}")
-    else:
-        filtered_features = all_features
-        filtered_ids = all_ids
-    return filtered_features, filtered_ids, all_features, all_ids, filtered_images, cameraIntrinsics, distCoeff
-
-
-def calibrate_outside(calibration, resizeWidth, resizeHeight, combinedCoverageImage, features, filepath, cam_info, calibModels, distortionModels, allCharucos, allCameraIntrinsics, allCameraDistCoeffs, model, ccm_model, _cameraModel, intrinsic_img):
-    images_path = filepath + '/' + cam_info['name']
-    image_files = glob.glob(images_path + "/*")
-    image_files.sort()
-    for im in image_files:
-        frame = cv2.imread(im)
-        height, width, _ = frame.shape
-        widthRatio = resizeWidth / width
-        heightRatio = resizeHeight / height
-        if (widthRatio > 0.8 and heightRatio > 0.8 and widthRatio <= 1.0 and heightRatio <= 1.0) or (widthRatio > 1.2 and heightRatio > 1.2) or (resizeHeight == 0):
-            resizeWidth = width
-            resizeHeight = height
-        break
-
-    print(
-        '<------------Calibrating {} ------------>'.format(cam_info['name']))
-
-    images_path = filepath + '/' + cam_info['name']
-    if "calib_model" in cam_info:
-        cameraModel_ccm, model_ccm = cam_info["calib_model"].split("_")
-        if cameraModel_ccm == "fisheye":
-            model_ccm == None
-        calib_model = cameraModel_ccm
-        distortion_model = model_ccm
-    else:
-        calib_model = _cameraModel
-        if cam_info["name"] in ccm_model:
-            distortion_model = ccm_model[cam_info["name"]]
-        else:
-            distortion_model = model
-    calibModels[cam_info['name']] = calib_model
-    distortionModels[cam_info['name']] = distortion_model
-
-    
-
-
-    img_path = glob.glob(images_path + "/*")
-    if allCharucos == {}:
-        img_path = sorted(img_path, key=lambda x: int(x.split('_')[1]))
-    else:
-        img_path.sort()
-    cam_info["img_path"] = img_path
-
-    if per_ccm:
-        start = time.time()
-        print('starting getting and filtering')
-        filtered_features, filtered_ids, all_features, all_ids, filtered_images, cameraIntrinsics, distCoeff = get_and_filter_features(calibration, images_path, width, height, features, allCharucos[cam_info["name"]], cam_info, intrinsic_img, _cameraModel, distortion_model)
-        
-        print(f'getting and filtering took {round(time.time() - start, 2)}s')
-        
-        cam_info['filtered_ids'] = filtered_ids
-        cam_info['filtered_corners'] = filtered_features
-
-        start = time.time()
-        print('starting calibrate_wf')
-        ret, cameraIntrinsics, distCoeff, _, _, filtered_ids, filtered_corners, size, coverageImage, all_corners, all_ids = calibration.calibrate_wf_intrinsics(cam_info["name"], all_features, all_ids, filtered_features, filtered_ids, cam_info["imsize"], cam_info["hfov"], features, filtered_images, allCharucos, calib_model, distortion_model, cameraIntrinsics, distCoeff)
-        if isinstance(ret, str) and all_ids is None:
-            raise RuntimeError('Exception' + ret) # TODO : Handle
-        print(f'calibrate_wf took {round(time.time() - start, 2)}s')
-    else:
-        ret, cameraIntrinsics, distCoeff, _, _, filtered_ids, filtered_corners, size, coverageImage, all_corners, all_ids = calibration.calibrate_intrinsics(
-            images_path, cam_info['hfov'], cam_info["name"], allCharucos, width, height, calib_model, distortion_model)
-        cam_info['filtered_ids'] = filtered_ids
-        cam_info['filtered_corners'] = filtered_corners
-    allCameraIntrinsics[cam_info["name"]] = cameraIntrinsics
-    allCameraDistCoeffs[cam_info["name"]] = distCoeff
-    cam_info['intrinsics'] = cameraIntrinsics
-    cam_info['dist_coeff'] = distCoeff
-    cam_info['size'] = size # (Width, height)
-    cam_info['reprojection_error'] = ret
-    print("Reprojection error of {0}: {1}".format(
-        cam_info['name'], ret))
-    
-    coverage_name = cam_info['name']
-    print_text = f'Coverage Image of {coverage_name} with reprojection error of {round(ret,5)}'
-    height, width, _ = coverageImage.shape
-
-    if width > resizeWidth and height > resizeHeight:
-        coverageImage = cv2.resize(
-        coverageImage, (0, 0), fx= resizeWidth / width, fy= resizeWidth / width)
-
-    height, width, _ = coverageImage.shape
-    if height > resizeHeight:
-        height_offset = (height - resizeHeight)//2
-        coverageImage = coverageImage[height_offset:height_offset+resizeHeight, :]
-    
-    height, width, _ = coverageImage.shape
-    height_offset = (resizeHeight - height)//2
-    width_offset = (resizeWidth - width)//2
-    subImage = np.pad(coverageImage, ((height_offset, height_offset), (width_offset, width_offset), (0, 0)), 'constant', constant_values=0)
-    cv2.putText(subImage, print_text, (50, 50+height_offset), cv2.FONT_HERSHEY_SIMPLEX, 2*coverageImage.shape[0]/1750, (0, 0, 0), 2)
-    if combinedCoverageImage is None:
-        combinedCoverageImage = subImage
-    else:
-        combinedCoverageImage = np.hstack((combinedCoverageImage, subImage))
-    coverage_file_path = filepath + '/' + coverage_name + '_coverage.png'
-    
-    cv2.imwrite(coverage_file_path, subImage)
-    return combinedCoverageImage
-
-def estimate_pose_and_filter_single(*args):
-    corners, ids, K, d, min_inliers, max_threshold, threshold_stepper, squaresX, squaresY, squareSize, markerSize = args[0]
-    
-    
-    aruco_dictionary = aruco.Dictionary_get(aruco.DICT_4X4_1000)
-    board = aruco.CharucoBoard_create(
-        # 22, 16,
-        squaresX, squaresY,
-        squareSize,
-        markerSize,
-        aruco_dictionary)
+    board = calibration._board
     
     objpoints = np.array([board.chessboardCorners[id] for id in ids], dtype=np.float32)
     
@@ -347,6 +239,130 @@ def estimate_pose_and_filter_single(*args):
         #removed_corners.extend(corners2[removed_mask])
         return valid_ids.reshape(-1, 1).astype(np.int32), corners2[valid_mask].reshape(-1, 1, 2), corners2[removed_mask]
 
+def get_and_filter_features(calibration, images_path, width, height, features, charucos, cam_info, intrinsic_img, _cameraModel, distortion_model):
+    all_features, all_ids, imsize = calibration.getting_features(images_path, width, height, features=features, charucos=charucos)
+
+    if isinstance(all_features, str) and all_ids is None:
+        raise RuntimeError(f'Exception {all_features}') # TODO : Handle
+    cam_info["imsize"] = imsize
+
+    f = imsize[0] / (2 * np.tan(np.deg2rad(cam_info["hfov"]/2)))
+    print("INTRINSIC CALIBRATION")
+    cameraIntrinsics = np.array([[f,    0.0,      imsize[0]/2],
+                                 [0.0,     f,      imsize[1]/2],
+                                 [0.0,   0.0,        1.0]])
+
+    distCoeff = np.zeros((12, 1))
+
+    if cam_info["name"] in intrinsic_img:
+        raise RuntimeError('This is broken')
+        all_features, all_ids, filtered_images = calibration.remove_features(filtered_features, filtered_ids, intrinsic_img[cam_info["name"]], image_files)
+    else:
+        filtered_images = images_path
+
+    current_time = time.time()
+    if _cameraModel != "fisheye":
+        print("Filtering corners")
+        removed_features, filtered_features, filtered_ids, cameraIntrinsics, distCoeff = calibration.filtering_features(all_features, all_ids, cam_info["name"],imsize,cam_info["hfov"], cameraIntrinsics, distCoeff, distortion_model)
+
+        if filtered_features is None:
+            raise RuntimeError('Exception') # TODO : Handle
+
+        print(f"Filtering takes: {time.time()-current_time}")
+    else:
+        filtered_features = all_features
+        filtered_ids = all_ids
+    return filtered_features, filtered_ids, all_features, all_ids, filtered_images, cameraIntrinsics, distCoeff
+
+def calibrate_outside(calibration, features, images_path, cam_info, calib_model, distortion_model, charucos, _cameraModel, intrinsic_img, width, height):
+    if per_ccm:
+        start = time.time()
+        print('starting getting and filtering')
+        filtered_features, filtered_ids, all_features, all_ids, filtered_images, cameraIntrinsics, distCoeff = get_and_filter_features(calibration, images_path, width, height, features, charucos, cam_info, intrinsic_img, _cameraModel, distortion_model)
+        
+        print(f'getting and filtering took {round(time.time() - start, 2)}s')
+        
+        cam_info['filtered_ids'] = filtered_ids
+        cam_info['filtered_corners'] = filtered_features
+
+        start = time.time()
+        print('starting calibrate_wf')
+        ret, cameraIntrinsics, distCoeff, _, _, filtered_ids, filtered_corners, size, coverageImage, all_corners, all_ids = calibration.calibrate_wf_intrinsics(cam_info["name"], all_features, all_ids, filtered_features, filtered_ids, cam_info["imsize"], cam_info["hfov"], features, filtered_images, charucos, calib_model, distortion_model, cameraIntrinsics, distCoeff)
+        if isinstance(ret, str) and all_ids is None:
+            raise RuntimeError('Exception' + ret) # TODO : Handle
+        print(f'calibrate_wf took {round(time.time() - start, 2)}s')
+    else:
+        ret, cameraIntrinsics, distCoeff, _, _, filtered_ids, filtered_corners, size, coverageImage, all_corners, all_ids = calibration.calibrate_intrinsics(
+            images_path, cam_info['hfov'], cam_info["name"], charucos, width, height, calib_model, distortion_model)
+        cam_info['filtered_ids'] = filtered_ids
+        cam_info['filtered_corners'] = filtered_corners
+
+    cam_info['intrinsics'] = cameraIntrinsics
+    cam_info['dist_coeff'] = distCoeff
+    cam_info['size'] = size # (Width, height)
+    cam_info['reprojection_error'] = ret
+    print("Reprojection error of {0}: {1}".format(
+        cam_info['name'], ret))
+    
+    return cameraIntrinsics, distCoeff
+
+def calibrate_ccms(calibration, board_config, filepath, charucos, model, ccm_model, _cameraModel, intrinsic_img, features, squaresX, squaresY, squareSize, markerSize):
+    calibModels = {} # Still needs to be passed to stereo calibration
+    distortionModels = {} # Still needs to be passed to stereo calibration
+    allCameraIntrinsics = {} # Still needs to be passed to stereo calibration
+    allCameraDistCoeffs = {} # Still needs to be passed to stereo calibration
+    combinedCoverageImage = None # TODO : It might not actually be combined in the calibration loop
+    resizeWidth, resizeHeight = 1280, 800
+    
+    activeCameras = [(cam, cam_info) for cam, cam_info in board_config['cameras'].items() if not cam_info['name'] in calibration.disableCamera]
+
+    for cam, cam_info in activeCameras:
+        images_path = filepath + '/' + cam_info['name']
+        image_files = glob.glob(images_path + "/*")
+        image_files.sort()
+        for im in image_files:
+            frame = cv2.imread(im)
+            height, width, _ = frame.shape
+            widthRatio = resizeWidth / width
+            heightRatio = resizeHeight / height
+            if (widthRatio > 0.8 and heightRatio > 0.8 and widthRatio <= 1.0 and heightRatio <= 1.0) or (widthRatio > 1.2 and heightRatio > 1.2) or (resizeHeight == 0):
+                resizeWidth = width
+                resizeHeight = height
+            break
+        cam_info['width'] = width
+        cam_info['height'] = height
+
+        images_path = filepath + '/' + cam_info['name']
+        if "calib_model" in cam_info:
+            cameraModel_ccm, model_ccm = cam_info["calib_model"].split("_")
+            if cameraModel_ccm == "fisheye":
+                model_ccm == None
+            calib_model = cameraModel_ccm
+            distortion_model = model_ccm
+        else:
+            calib_model = _cameraModel
+            if cam_info["name"] in ccm_model:
+                distortion_model = ccm_model[cam_info["name"]]
+            else:
+                distortion_model = model
+        calibModels[cam_info['name']] = calib_model
+        distortionModels[cam_info['name']] = distortion_model
+
+        img_path = glob.glob(images_path + "/*")
+        if charucos == {}:
+            img_path = sorted(img_path, key=lambda x: int(x.split('_')[1]))
+        else:
+            img_path.sort()
+        cam_info["img_path"] = img_path
+
+    #with Pool() as pool:
+    #    result = pool.map(calibrate_outside, [[features, images_path, cam_info, calibModels[cam_info['name']], distortionModels[cam_info['name']], charucos[cam_info['name']], _cameraModel, intrinsic_img, cam_info['width'], cam_info['height'], squaresX, squaresY, squareSize, markerSize] for _, cam_info in activeCameras])
+    for cam, cam_info in activeCameras:
+            
+        K, d = calibrate_outside(calibration, features, images_path, cam_info, calibModels[cam_info['name']], distortionModels[cam_info['name']], charucos[cam_info['name']], _cameraModel, intrinsic_img, cam_info['width'], cam_info['height'])
+
+    return calibModels, distortionModels, allCameraIntrinsics, allCameraDistCoeffs
+
 class StereoCalibration(object):
     """Class to Calculate Calibration and Rectify a Stereo Camera."""
 
@@ -356,13 +372,20 @@ class StereoCalibration(object):
         self.model = model
         self.output_scale_factor = outputScaleFactor
         self.disableCamera = disableCamera
-        self.errors = {}
         self.initial_max_threshold = initial_max_threshold
         self.initial_min_filtered = initial_min_filtered
         self.calibration_max_threshold = calibration_max_threshold
         self.calibration_min_filtered = initial_min_filtered
 
         """Class to Calculate Calibration and Rectify a Stereo Camera."""
+
+    @property
+    def _aruco_dictionary(self):
+        return self._proxyDict.dictionary
+
+    @property
+    def _board(self):
+        return self._proxyDict.board
 
     def calibrate(self, board_config, filepath, square_size, mrk_size, squaresX, squaresY, camera_model, enable_disp_rectify, charucos = {}, intrinsic_img = {}, extrinsic_img = []):
         """Function to calculate calibration for stereo camera."""
@@ -376,47 +399,22 @@ class StereoCalibration(object):
                 extrinsic_img[cam].sort(reverse=True)
         self.intrinsic_img = intrinsic_img
         self.extrinsic_img = extrinsic_img
-        self.errors = {}
         self._enable_rectification_disp = True
         self._cameraModel = camera_model
         self._data_path = filepath
-        self._aruco_dictionary = aruco.Dictionary_get(aruco.DICT_4X4_1000)
-        self._board = aruco.CharucoBoard_create(
-            # 22, 16,
-            squaresX, squaresY,
-            square_size,
-            mrk_size,
-            self._aruco_dictionary)
+        self._proxyDict = ProxyDict(squaresX, squaresY, square_size, mrk_size, aruco.DICT_4X4_1000)
         self.squaresX = squaresX
         self.squaresY = squaresY
         self.squareSize = square_size
         self.markerSize = mrk_size
 
         self.cams = []
-        # parameters = aruco.DetectorParameters_create()
-        combinedCoverageImage = None # TODO : It might not actually be combined in the calibration loop
-        resizeWidth, resizeHeight = 1280, 800
-        assert mrk_size != None,  "ERROR: marker size not set"
-        calibModels = {} # Still needs to be passed to stereo calibration
-        distortionModels = {} # Still needs to be passed to stereo calibration
-        allCameraIntrinsics = {} # Still needs to be passed to stereo calibration
-        allCameraDistCoeffs = {} # Still needs to be passed to stereo calibration
         features = None
+        # parameters = aruco.DetectorParameters_create()
+        assert mrk_size != None,  "ERROR: marker size not set"
 
-        for camera in board_config['cameras']:
-            cam_info = board_config['cameras'][camera]
-            self.id = cam_info["name"]
-            if cam_info["name"] in self.disableCamera:
-                continue
-            combinedCoverageImage = calibrate_outside(self, resizeWidth, resizeHeight, combinedCoverageImage, features, filepath, cam_info, calibModels, distortionModels, charucos, allCameraIntrinsics, allCameraDistCoeffs, self.model, self.ccm_model, self._cameraModel, self.intrinsic_img)
+        calibModels, distortionModels, allCameraIntrinsics, allCameraDistCoeffs = calibrate_ccms(self, board_config, filepath, charucos, self.model, self.ccm_model, self._cameraModel, self.intrinsic_img, features, self.squaresX, self.squaresY, self.squareSize, self.markerSize)
 
-        if self.errors != {}:
-            string = ""
-            for key in self.errors:
-                string += self.errors[key][0] + "\n"
-            raise StereoExceptions(message=string, stage="intrinsic")
-
-        combinedCoverageImage = cv2.resize(combinedCoverageImage, (0, 0), fx=self.output_scale_factor, fy=self.output_scale_factor)
         if enable_disp_rectify:
             # cv2.imshow('coverage image', combinedCoverageImage)
             cv2.waitKey(1)
@@ -553,10 +551,8 @@ class StereoCalibration(object):
         #for corners, ids in zip(allCorners, allIds):
         current = time.time()
         
-        pool = multiprocessing.Pool(processes=16)
-
-        # Map the functions to the pool
-        results = pool.map(func=estimate_pose_and_filter_single, iterable=[(a, b, K, d, min_inliers, max_threshold, threshold_stepper, self.squaresX, self.squaresY, self.squareSize, self.markerSize) for a, b in zip(allCorners, allIds)])
+        with multiprocessing.Pool(processes=16) as pool:
+            results = pool.map(func=estimate_pose_and_filter_single, iterable=[(self, a, b, K, d, min_inliers, max_threshold, threshold_stepper) for a, b in zip(allCorners, allIds)])
 
         filtered_ids, filtered_corners, removed_corners = zip(*results)
 
