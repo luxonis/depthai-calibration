@@ -421,6 +421,11 @@ class StereoCalibration(object):
             cv2.waitKey(1)
             cv2.destroyAllWindows()
         
+        self.calibrate_stereo_pairs(filepath, board_config, calibModels, distortionModels, allCameraIntrinsics, allCameraDistCoeffs, features)
+    
+        return 1, board_config
+
+    def calibrate_stereo_pairs(self, filepath, board_config, calibModels, distortionModels, allCameraIntrinsics, allCameraDistCoeffs, features):
         for camera in board_config['cameras']:
             left_cam_info = board_config['cameras'][camera]
             if str(left_cam_info["name"]) in self.disableCamera:
@@ -429,6 +434,7 @@ class StereoCalibration(object):
                 continue
             if not 'to_cam' in left_cam_info['extrinsics']:
                 continue
+
             left_cam = camera
             right_cam = left_cam_info['extrinsics']['to_cam']
             left_path = filepath + '/' + left_cam_info['name']
@@ -509,8 +515,6 @@ class StereoCalibration(object):
 
                 left_cam_info['extrinsics']['rotation_matrix'] = extrinsics[1]
                 left_cam_info['extrinsics']['translation'] = extrinsics[2]
-    
-        return 1, board_config
 
     def getting_features(self, img_path, width, height, features = None, charucos=None):
         if charucos:
