@@ -635,6 +635,40 @@ class StereoCalibration(object):
             print("Using CUSTOM flags")
             flags = self.distortion_model[name]
         return flags
+    
+    def get_fisheye_distortion_flags(self,name):
+        def is_binary_string(s: str) -> bool:
+        # Check if all characters in the string are '0' or '1'
+            return all(char in '01' for char in s)
+        if self.distortion_model[name] == None:
+            print("Use DEFAULT model")
+            flags = cv2.CALIB_RATIONAL_MODEL
+        elif is_binary_string(self.distortion_model[name]):
+            flags = cv2.CALIB_RATIONAL_MODEL
+            binary_number = int(self.distortion_model[name], 2)
+            # Print the results
+            if binary_number == 0:
+                clauses_status = [True, True,True, True]
+            else:
+                clauses_status = [(binary_number & (1 << i)) != 0 for i in range(len(self.distortion_model[name]))]
+                clauses_status = clauses_status[::-1]
+            if clauses_status[0]:
+                print("FIX_K1")
+                flags += cv2.fisheye.CALIB_FIX_K1
+            if clauses_status[1]:
+                print("FIX_K2")
+                flags += cv2.fisheye.CALIB_FIX_K2
+            if clauses_status[2]:
+                print("FIX_K3")
+                flags += cv2.fisheye.CALIB_FIX_K3
+            if clauses_status[3]:
+                print("FIX_K4")
+                flags += cv2.fisheye.CALIB_FIX_K4
+
+        elif isinstance(self.distortion_model[name], int):
+            print("Using CUSTOM flags")
+            flags = self.distortion_model[name]
+        return flags
 
     def calibrate_wf_intrinsics(self, name, all_Features, all_features_Ids, allCorners, allIds, imsize, hfov, features, image_files):
         image_files = glob.glob(image_files + "/*")
@@ -722,9 +756,9 @@ class StereoCalibration(object):
                 all_ids.append(valid_ids.reshape(-1, 1).astype(np.int32))  # Reshape and store as array of arrays
 
                 # Collect data for valid points
-                reported_error.extend(errors)
+                reported_error.extend(errors[valid_mask])
                 all_error.extend(errors[valid_mask])
-                display_corners.extend(corners2)
+                display_corners.extend(corners2[valid_mask])
                 display_points.extend(imgpoints2[valid_mask])
                 all_points.append(imgpoints2[valid_mask])  # Collect valid points for calibration
                 all_corners.append(corners2[valid_mask].reshape(-1, 1, 2))   # Collect valid corners for calibration
@@ -1400,11 +1434,12 @@ class StereoCalibration(object):
  
         print("Camera Matrix initialization.............")
         print(cameraMatrixInit)
-        flags = 0
-        flags |= cv2.fisheye.CALIB_CHECK_COND 
-        flags |= cv2.fisheye.CALIB_USE_INTRINSIC_GUESS 
-        flags |= cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC
-        flags |= cv2.fisheye.CALIB_FIX_SKEW
+        flags = cv2.fisheye.CALIB_USE_INTRINSIC_GUESS
+        flags += cv2.fisheye.CALIB_CHECK_COND
+        flags += cv2.fisheye.CALIB_FIX_SKEW
+        flags += cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC
+        distortion_flags = self.get_fisheye_distortion_flags(name)
+        flags += distortion_flags
         
 
         term_criteria = (cv2.TERM_CRITERIA_COUNT +
