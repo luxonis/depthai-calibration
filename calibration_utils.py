@@ -179,9 +179,7 @@ def get_and_filter_features(calibration, images_path, width, height, features, c
         filtered_ids = all_ids
     return filtered_features, filtered_ids, all_features, all_ids, filtered_images, cameraIntrinsics, distCoeff
 
-def calibrate_ccm_intrinsics(args):
-    calibration, features, images_path, cam_info, calib_model, distortion_model, charucos, _cameraModel, intrinsic_img, width, height = args
-
+def calibrate_ccm_intrinsics(calibration, features, images_path, cam_info, calib_model, distortion_model, charucos, _cameraModel, intrinsic_img, width, height):
     if per_ccm:
         start = time.time()
         print('starting getting and filtering')
@@ -261,7 +259,27 @@ class StereoCalibration(object):
         self.cams = []
         features = None
 
-        calibModels, distortionModels, allCameraIntrinsics, allCameraDistCoeffs = self.get_features_and_calibrate_intrinsics(board_config, filepath, charucos, self.model, self.ccm_model, self._cameraModel, self.intrinsic_img, features)
+        calibModels = {} # Still needs to be passed to stereo calibration
+        distortionModels = {} # Still needs to be passed to stereo calibration
+        allCameraIntrinsics = {} # Still needs to be passed to stereo calibration
+        allCameraDistCoeffs = {} # Still needs to be passed to stereo calibration
+        resizeWidth, resizeHeight = 1280, 800
+        
+        activeCameras = [(cam, cam_info) for cam, cam_info in board_config['cameras'].items() if not cam_info['name'] in self.disableCamera]
+
+        for cam, cam_info in activeCameras:
+            width, height, img_path, calib_model, distortion_model, images_path = self.load_camera_data(filepath, cam_info, self._cameraModel, self.ccm_model, self.model, charucos, resizeWidth, resizeHeight)
+            cam_info['width'] = width
+            cam_info['height'] = height
+            calibModels[cam_info['name']] = calib_model
+            distortionModels[cam_info['name']] = distortion_model
+            cam_info["img_path"] = img_path
+            cam_info['images_path'] = images_path
+
+        for cam, cam_info in activeCameras:
+            cameraIntrinsics, distCoeff = calibrate_ccm_intrinsics(self, features, images_path, cam_info, calibModels[cam_info['name']], distortionModels[cam_info['name']], charucos[cam_info['name']], self._cameraModel, intrinsic_img, cam_info['width'], cam_info['height'])
+            allCameraIntrinsics[cam_info['name']] = cameraIntrinsics
+            allCameraDistCoeffs[cam_info['name']] = distCoeff
 
         if enable_disp_rectify:
             # cv2.imshow('coverage image', combinedCoverageImage)
@@ -272,58 +290,41 @@ class StereoCalibration(object):
     
         return 1, board_config
 
-    def get_features_and_calibrate_intrinsics(self, board_config, filepath, charucos, model, ccm_model, _cameraModel, intrinsic_img, features):
-        calibModels = {} # Still needs to be passed to stereo calibration
-        distortionModels = {} # Still needs to be passed to stereo calibration
-        allCameraIntrinsics = {} # Still needs to be passed to stereo calibration
-        allCameraDistCoeffs = {} # Still needs to be passed to stereo calibration
-        resizeWidth, resizeHeight = 1280, 800
-        
-        activeCameras = [(cam, cam_info) for cam, cam_info in board_config['cameras'].items() if not cam_info['name'] in self.disableCamera]
+    def load_camera_data(self, filepath, cam_info, _cameraModel, ccm_model, model, charucos, resizeWidth, resizeHeight):
+        images_path = filepath + '/' + cam_info['name']
+        image_files = glob.glob(images_path + "/*")
+        image_files.sort()
+        for im in image_files:
+            frame = cv2.imread(im)
+            height, width, _ = frame.shape
+            widthRatio = resizeWidth / width
+            heightRatio = resizeHeight / height
+            if (widthRatio > 0.8 and heightRatio > 0.8 and widthRatio <= 1.0 and heightRatio <= 1.0) or (widthRatio > 1.2 and heightRatio > 1.2) or (resizeHeight == 0):
+                resizeWidth = width
+                resizeHeight = height
+            break
 
-        for cam, cam_info in activeCameras:
-            images_path = filepath + '/' + cam_info['name']
-            image_files = glob.glob(images_path + "/*")
-            image_files.sort()
-            for im in image_files:
-                frame = cv2.imread(im)
-                height, width, _ = frame.shape
-                widthRatio = resizeWidth / width
-                heightRatio = resizeHeight / height
-                if (widthRatio > 0.8 and heightRatio > 0.8 and widthRatio <= 1.0 and heightRatio <= 1.0) or (widthRatio > 1.2 and heightRatio > 1.2) or (resizeHeight == 0):
-                    resizeWidth = width
-                    resizeHeight = height
-                break
-            cam_info['width'] = width
-            cam_info['height'] = height
-
-            images_path = filepath + '/' + cam_info['name']
-            if "calib_model" in cam_info:
-                cameraModel_ccm, model_ccm = cam_info["calib_model"].split("_")
-                if cameraModel_ccm == "fisheye":
-                    model_ccm == None
-                calib_model = cameraModel_ccm
-                distortion_model = model_ccm
+        images_path = filepath + '/' + cam_info['name']
+        if "calib_model" in cam_info:
+            cameraModel_ccm, model_ccm = cam_info["calib_model"].split("_")
+            if cameraModel_ccm == "fisheye":
+                model_ccm == None
+            calib_model = cameraModel_ccm
+            distortion_model = model_ccm
+        else:
+            calib_model = _cameraModel
+            if cam_info["name"] in ccm_model:
+                distortion_model = ccm_model[cam_info["name"]]
             else:
-                calib_model = _cameraModel
-                if cam_info["name"] in ccm_model:
-                    distortion_model = ccm_model[cam_info["name"]]
-                else:
-                    distortion_model = model
-            calibModels[cam_info['name']] = calib_model
-            distortionModels[cam_info['name']] = distortion_model
+                distortion_model = model
 
-            img_path = glob.glob(images_path + "/*")
-            if charucos == {}:
-                img_path = sorted(img_path, key=lambda x: int(x.split('_')[1]))
-            else:
-                img_path.sort()
-            cam_info["img_path"] = img_path
+        img_path = glob.glob(images_path + "/*")
+        if charucos == {}:
+            img_path = sorted(img_path, key=lambda x: int(x.split('_')[1]))
+        else:
+            img_path.sort()
 
-        with ThreadPool(3) as pool:
-            result = pool.map(calibrate_ccm_intrinsics, [[self, features, images_path, cam_info, calibModels[cam_info['name']], distortionModels[cam_info['name']], charucos[cam_info['name']], _cameraModel, intrinsic_img, cam_info['width'], cam_info['height']] for _, cam_info in activeCameras])
-
-        return calibModels, distortionModels, allCameraIntrinsics, allCameraDistCoeffs
+        return width, height, img_path, calib_model, distortion_model, images_path
 
     def calibrate_stereo_pairs(self, filepath, board_config, calibModels, distortionModels, allCameraIntrinsics, allCameraDistCoeffs, features):
         for camera in board_config['cameras']:
