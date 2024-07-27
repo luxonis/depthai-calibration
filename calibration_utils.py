@@ -145,6 +145,8 @@ def estimate_pose_and_filter_single(args):
         return valid_ids.reshape(-1, 1).astype(np.int32), corners2[valid_mask].reshape(-1, 1, 2), corners2[removed_mask]
 
 def get_and_filter_features(calibration, images_path, width, height, features, charucos, cam_info, intrinsic_img, _cameraModel, distortion_model):
+    start = time.time()
+    print('starting getting and filtering')
     all_features, all_ids, imsize = calibration.getting_features(images_path, width, height, features=features, charucos=charucos)
 
     if isinstance(all_features, str) and all_ids is None:
@@ -177,21 +179,19 @@ def get_and_filter_features(calibration, images_path, width, height, features, c
     else:
         filtered_features = all_features
         filtered_ids = all_ids
-    return filtered_features, filtered_ids, all_features, all_ids, filtered_images, cameraIntrinsics, distCoeff
-
-def calibrate_ccm_intrinsics_per_ccm(calibration, features, cam_info, charucos, _cameraModel, intrinsic_img):
-    start = time.time()
-    print('starting getting and filtering')
-    filtered_features, filtered_ids, all_features, all_ids, filtered_images, cameraIntrinsics, distCoeff = get_and_filter_features(calibration, cam_info['images_path'], cam_info['width'], cam_info['height'], features, charucos, cam_info, intrinsic_img, _cameraModel, cam_info['distortion_model'])
-    
     print(f'getting and filtering took {round(time.time() - start, 2)}s')
     
     cam_info['filtered_ids'] = filtered_ids
     cam_info['filtered_corners'] = filtered_features
+    cam_info['intrinsics'] = cameraIntrinsics
+    cam_info['dist_coeff'] = distCoeff
 
+    return cam_info
+
+def calibrate_ccm_intrinsics_per_ccm(calibration, features, cam_info):
     start = time.time()
     print('starting calibrate_wf')
-    ret, cameraIntrinsics, distCoeff, _, _, filtered_ids, filtered_corners, size, coverageImage, all_corners, all_ids = calibration.calibrate_wf_intrinsics(cam_info["name"], all_features, all_ids, filtered_features, filtered_ids, cam_info["imsize"], cam_info["hfov"], features, filtered_images, charucos, cam_info['calib_model'], cam_info['distortion_model'], cameraIntrinsics, distCoeff)
+    ret, cameraIntrinsics, distCoeff, _, _, filtered_ids, filtered_corners, size, coverageImage, all_corners, all_ids = calibration.calibrate_wf_intrinsics(cam_info["name"], cam_info['filtered_corners'], cam_info['filtered_ids'], cam_info["imsize"], cam_info["hfov"], features, cam_info['calib_model'], cam_info['distortion_model'], cam_info['intrinsics'], cam_info['dist_coeff'])
     if isinstance(ret, str) and all_ids is None:
         raise RuntimeError('Exception' + ret) # TODO : Handle
     print(f'calibrate_wf took {round(time.time() - start, 2)}s')
@@ -303,7 +303,8 @@ class StereoCalibration(object):
 
         if per_ccm:
             for cam, cam_info in activeCameras:
-                cam_info = calibrate_ccm_intrinsics_per_ccm(self, features, cam_info, charucos[cam_info['name']], self._cameraModel, intrinsic_img)
+                cam_info = get_and_filter_features(self, cam_info['images_path'], cam_info['width'], cam_info['height'], features, charucos[cam_info['name']], cam_info, intrinsic_img, self._cameraModel, cam_info['distortion_model'])
+                cam_info = calibrate_ccm_intrinsics_per_ccm(self, features, cam_info)
         else:
             for cam, cam_info in activeCameras:
                 cam_info = calibrate_ccm_intrinsics(self, cam_info, charucos[cam_info['name']])
@@ -600,9 +601,7 @@ class StereoCalibration(object):
             flags = distortionModel
         return flags
 
-    def calibrate_wf_intrinsics(self, name, all_Features, all_features_Ids, allCorners, allIds, imsize, hfov, features, image_files, charucos, calib_model, distortionModel, cameraIntrinsics, distCoeff):
-        image_files = glob.glob(image_files + "/*")
-        image_files.sort()
+    def calibrate_wf_intrinsics(self, name, allCorners, allIds, imsize, hfov, features, calib_model, distortionModel, cameraIntrinsics, distCoeff):
         coverageImage = np.ones(imsize[::-1], np.uint8) * 255
         coverageImage = cv2.cvtColor(coverageImage, cv2.COLOR_GRAY2BGR)
         coverageImage = self.draw_corners(allCorners, coverageImage)
@@ -610,10 +609,7 @@ class StereoCalibration(object):
             if features == None or features == "charucos":
                 distortion_flags = self.get_distortion_flags(distortionModel)
                 ret, cameraIntrinsics, distCoeff, rotation_vectors, translation_vectors, filtered_ids, filtered_corners, allCorners, allIds  = self.calibrate_camera_charuco(
-                    all_Features, all_features_Ids,allCorners, allIds, imsize, hfov, name, distortion_flags, cameraIntrinsics, distCoeff)
-            if charucos == {}:
-                self.undistort_visualization(
-                    image_files, cameraIntrinsics, distCoeff, imsize, name)
+                    allCorners, allIds, imsize, hfov, name, distortion_flags, cameraIntrinsics, distCoeff)
 
                 return ret, cameraIntrinsics, distCoeff, rotation_vectors, translation_vectors, filtered_ids, filtered_corners, imsize, coverageImage, allCorners, allIds
             else:
@@ -624,8 +620,6 @@ class StereoCalibration(object):
                 print('Fisheye--------------------------------------------------')
                 ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, filtered_ids, filtered_corners = self.calibrate_fisheye(
                     allCorners, allIds, imsize, hfov, name)
-                self.undistort_visualization(
-                        image_files, camera_matrix, distortion_coefficients, imsize, name)
                 print('Fisheye rotation vector', rotation_vectors[0])
                 print('Fisheye translation vector', translation_vectors[0])
 
@@ -845,7 +839,7 @@ class StereoCalibration(object):
         coverageImage = cv2.cvtColor(coverageImage, cv2.COLOR_GRAY2BGR)
         coverageImage = self.draw_corners(allCorners, coverageImage)
         if calib_model == 'perspective':
-            distortion_flags = self.get_distortion_flags(distortionModel)
+            distortion_flags = self.get_distortion_flags(distortionModel) # TODO : The call to calibrate_camera_charuco has different parameters than it should
             ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, filtered_ids, filtered_corners, allCorners, allIds  = self.calibrate_camera_charuco(
                 allCorners, allIds, imsize, hfov, name, distortion_flags)
             self.undistort_visualization(
@@ -927,7 +921,7 @@ class StereoCalibration(object):
         return corners_removed, allIds, allCorners
 
 
-    def calibrate_camera_charuco(self, all_Features, all_features_Ids, allCorners, allIds, imsize, hfov, name, distortion_flags, cameraIntrinsics, distCoeff):
+    def calibrate_camera_charuco(self, allCorners, allIds, imsize, hfov, name, distortion_flags, cameraIntrinsics, distCoeff):
         """
         Calibrates the camera using the dected corners.
         """
