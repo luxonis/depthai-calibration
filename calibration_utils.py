@@ -73,109 +73,12 @@ class ProxyDict:
       self.__build()
     return self._board
 
-# Create the colormap using the dictionary
-GnRd = colors.LinearSegmentedColormap('GnRd', cdict)
-def get_quadrant_coordinates(width, height, nx, ny):
-    quadrant_width = width // nx
-    quadrant_height = height // ny
-    quadrant_coords = []
-    
-    for i in range(int(nx)):
-        for j in range(int(ny)):
-            left = i * quadrant_width
-            upper = j * quadrant_height
-            right = left + quadrant_width
-            bottom = upper + quadrant_height
-            quadrant_coords.append((left, upper, right, bottom))
-    
-    return quadrant_coords
-
-def sort_points_into_quadrants(points, width, height, error, nx = 4, ny = 4):
-    quadrant_coords = get_quadrant_coordinates(width, height, nx, ny)
-    quadrants = {i: [] for i in range(int(nx*ny))}  # Create a dictionary to store points by quadrant index
-
-    for x, y in points:
-        # Find the correct quadrant for each point
-        for index, (left, upper, right, bottom) in enumerate(quadrant_coords):
-            if left <= x < right and upper <= y < bottom:
-                quadrants[index].append(error[index])
-                break
-            
-    return quadrants, quadrant_coords
-
 def distance(point1, point2):
     return np.sqrt((point1[0] - point2[0])**2 + (point1[1] - point2[1])**2)
 # Creates a set of 13 polygon coordinates
 rectProjectionMode = 0
 
 colors = [(0, 255 , 0), (0, 0, 255)]
-def setPolygonCoordinates(height, width):
-    horizontal_shift = width//4
-    vertical_shift = height//4
-
-    margin = 60
-    slope = 150
-
-    p_coordinates = [
-        [[margin, margin], [margin, height-margin],
-            [width-margin, height-margin], [width-margin, margin]],
-
-        [[margin, 0], [margin, height], [width//2, height-slope], [width//2, slope]],
-        [[horizontal_shift, 0], [horizontal_shift, height], [
-            width//2 + horizontal_shift, height-slope], [width//2 + horizontal_shift, slope]],
-        [[horizontal_shift*2-margin, 0], [horizontal_shift*2-margin, height], [width//2 +
-                                                                               horizontal_shift*2-margin, height-slope], [width//2 + horizontal_shift*2-margin, slope]],
-
-        [[width-margin, 0], [width-margin, height],
-            [width//2, height-slope], [width//2, slope]],
-        [[width-horizontal_shift, 0], [width-horizontal_shift, height], [width //
-                                                                         2-horizontal_shift, height-slope], [width//2-horizontal_shift, slope]],
-        [[width-horizontal_shift*2+margin, 0], [width-horizontal_shift*2+margin, height], [width //
-                                                                                           2-horizontal_shift*2+margin, height-slope], [width//2-horizontal_shift*2+margin, slope]],
-
-        [[0, margin], [width, margin], [
-            width-slope, height//2], [slope, height//2]],
-        [[0, vertical_shift], [width, vertical_shift], [width-slope,
-                                                        height//2+vertical_shift], [slope, height//2+vertical_shift]],
-        [[0, vertical_shift*2-margin], [width, vertical_shift*2-margin], [width-slope,
-                                                                          height//2+vertical_shift*2-margin], [slope, height//2+vertical_shift*2-margin]],
-
-        [[0, height-margin], [width, height-margin],
-         [width-slope, height//2], [slope, height//2]],
-        [[0, height-vertical_shift], [width, height-vertical_shift], [width -
-                                                                      slope, height//2-vertical_shift], [slope, height//2-vertical_shift]],
-        [[0, height-vertical_shift*2+margin], [width, height-vertical_shift*2+margin], [width -
-                                                                                        slope, height//2-vertical_shift*2+margin], [slope, height//2-vertical_shift*2+margin]]
-    ]
-    return p_coordinates
-
-
-def getPolygonCoordinates(idx, p_coordinates):
-    return p_coordinates[idx]
-
-
-def getNumOfPolygons(p_coordinates):
-    return len(p_coordinates)
-
-# Filters polygons to just those at the given indexes.
-
-
-def select_polygon_coords(p_coordinates, indexes):
-    if indexes == None:
-        # The default
-        return p_coordinates
-    else:
-        print("Filtering polygons to those at indexes=", indexes)
-        return [p_coordinates[i] for i in indexes]
-
-
-def image_filename(polygon_index, total_num_of_captured_images):
-    return "p{polygon_index}_{total_num_of_captured_images}.png".format(polygon_index=polygon_index, total_num_of_captured_images=total_num_of_captured_images)
-
-
-def polygon_from_image_name(image_name):
-    """Returns the polygon index from an image name (ex: "left_p10_0.png" => 10)"""
-    return int(re.findall("p(\d+)", image_name)[0])
 
 class StereoExceptions(Exception):
     def __init__(self, message, stage, path=None, *args, **kwargs) -> None:
@@ -357,8 +260,6 @@ class StereoCalibration(object):
 
         self.cams = []
         features = None
-        # parameters = aruco.DetectorParameters_create()
-        assert mrk_size != None,  "ERROR: marker size not set"
 
         calibModels, distortionModels, allCameraIntrinsics, allCameraDistCoeffs = self.get_features_and_calibrate_intrinsics(board_config, filepath, charucos, self.model, self.ccm_model, self._cameraModel, self.intrinsic_img, features)
 
