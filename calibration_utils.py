@@ -179,28 +179,22 @@ def get_and_filter_features(calibration, images_path, width, height, features, c
         filtered_ids = all_ids
     return filtered_features, filtered_ids, all_features, all_ids, filtered_images, cameraIntrinsics, distCoeff
 
-def calibrate_ccm_intrinsics(calibration, features, cam_info, charucos, _cameraModel, intrinsic_img):
-    if per_ccm:
-        start = time.time()
-        print('starting getting and filtering')
-        filtered_features, filtered_ids, all_features, all_ids, filtered_images, cameraIntrinsics, distCoeff = get_and_filter_features(calibration, cam_info['images_path'], cam_info['width'], cam_info['height'], features, charucos, cam_info, intrinsic_img, _cameraModel, cam_info['distortion_model'])
-        
-        print(f'getting and filtering took {round(time.time() - start, 2)}s')
-        
-        cam_info['filtered_ids'] = filtered_ids
-        cam_info['filtered_corners'] = filtered_features
+def calibrate_ccm_intrinsics_per_ccm(calibration, features, cam_info, charucos, _cameraModel, intrinsic_img):
+    start = time.time()
+    print('starting getting and filtering')
+    filtered_features, filtered_ids, all_features, all_ids, filtered_images, cameraIntrinsics, distCoeff = get_and_filter_features(calibration, cam_info['images_path'], cam_info['width'], cam_info['height'], features, charucos, cam_info, intrinsic_img, _cameraModel, cam_info['distortion_model'])
+    
+    print(f'getting and filtering took {round(time.time() - start, 2)}s')
+    
+    cam_info['filtered_ids'] = filtered_ids
+    cam_info['filtered_corners'] = filtered_features
 
-        start = time.time()
-        print('starting calibrate_wf')
-        ret, cameraIntrinsics, distCoeff, _, _, filtered_ids, filtered_corners, size, coverageImage, all_corners, all_ids = calibration.calibrate_wf_intrinsics(cam_info["name"], all_features, all_ids, filtered_features, filtered_ids, cam_info["imsize"], cam_info["hfov"], features, filtered_images, charucos, cam_info['calib_model'], cam_info['distortion_model'], cameraIntrinsics, distCoeff)
-        if isinstance(ret, str) and all_ids is None:
-            raise RuntimeError('Exception' + ret) # TODO : Handle
-        print(f'calibrate_wf took {round(time.time() - start, 2)}s')
-    else:
-        ret, cameraIntrinsics, distCoeff, _, _, filtered_ids, filtered_corners, size, coverageImage, all_corners, all_ids = calibration.calibrate_intrinsics(
-            cam_info['images_path'], cam_info['hfov'], cam_info["name"], charucos, cam_info['width'], cam_info['height'], cam_info['calib_model'], cam_info['distortion_model'])
-        cam_info['filtered_ids'] = filtered_ids
-        cam_info['filtered_corners'] = filtered_corners
+    start = time.time()
+    print('starting calibrate_wf')
+    ret, cameraIntrinsics, distCoeff, _, _, filtered_ids, filtered_corners, size, coverageImage, all_corners, all_ids = calibration.calibrate_wf_intrinsics(cam_info["name"], all_features, all_ids, filtered_features, filtered_ids, cam_info["imsize"], cam_info["hfov"], features, filtered_images, charucos, cam_info['calib_model'], cam_info['distortion_model'], cameraIntrinsics, distCoeff)
+    if isinstance(ret, str) and all_ids is None:
+        raise RuntimeError('Exception' + ret) # TODO : Handle
+    print(f'calibrate_wf took {round(time.time() - start, 2)}s')
 
     cam_info['intrinsics'] = cameraIntrinsics
     cam_info['dist_coeff'] = distCoeff
@@ -208,6 +202,23 @@ def calibrate_ccm_intrinsics(calibration, features, cam_info, charucos, _cameraM
     cam_info['reprojection_error'] = ret
     print("Reprojection error of {0}: {1}".format(
         cam_info['name'], ret))
+
+    return cam_info
+
+def calibrate_ccm_intrinsics(calibration, cam_info, charucos):
+    ret, cameraIntrinsics, distCoeff, _, _, filtered_ids, filtered_corners, size, coverageImage, all_corners, all_ids = calibration.calibrate_intrinsics(
+        cam_info['images_path'], cam_info['hfov'], cam_info["name"], charucos, cam_info['width'], cam_info['height'], cam_info['calib_model'], cam_info['distortion_model'])
+    cam_info['filtered_ids'] = filtered_ids
+    cam_info['filtered_corners'] = filtered_corners
+
+    cam_info['intrinsics'] = cameraIntrinsics
+    cam_info['dist_coeff'] = distCoeff
+    cam_info['size'] = size # (Width, height)
+    cam_info['reprojection_error'] = ret
+    print("Reprojection error of {0}: {1}".format(
+        cam_info['name'], ret))
+
+    return cam_info
 
 def calibrate_stereo_pair(calibration, left, right, board_config, features):
     calibration.calibrate_stereo_pair(left, right, board_config, features)
@@ -290,8 +301,12 @@ class StereoCalibration(object):
         for cam, cam_info in activeCameras:
             cam_info = load_camera_data(self, filepath, cam_info, self._cameraModel, self.ccm_model, self.model, charucos, resizeWidth, resizeHeight)
 
-        for cam, cam_info in activeCameras:
-            calibrate_ccm_intrinsics(self, features, cam_info, charucos[cam_info['name']], self._cameraModel, intrinsic_img)
+        if per_ccm:
+            for cam, cam_info in activeCameras:
+                cam_info = calibrate_ccm_intrinsics_per_ccm(self, features, cam_info, charucos[cam_info['name']], self._cameraModel, intrinsic_img)
+        else:
+            for cam, cam_info in activeCameras:
+                cam_info = calibrate_ccm_intrinsics(self, cam_info, charucos[cam_info['name']])
 
         for left, right in stereoPairs:
             calibrate_stereo_pair(self, left, right, board_config, features)
