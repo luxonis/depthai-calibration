@@ -150,10 +150,6 @@ def get_features(calibration, images_path, width, height, features, charucos, ca
     if isinstance(all_features, str) and all_ids is None:
         raise RuntimeError(f'Exception {all_features}') # TODO : Handle
     cam_info["imsize"] = imsize
-    
-    return cam_info, all_features, all_ids
-
-def filter_features(calibration, images_path, cam_info, intrinsic_img, distortion_model, all_features, all_ids):
     f = cam_info['imsize'][0] / (2 * np.tan(np.deg2rad(cam_info["hfov"]/2)))
     print("INTRINSIC CALIBRATION")
     cameraIntrinsics = np.array([[f,    0.0,      cam_info['imsize'][0]/2],
@@ -161,27 +157,73 @@ def filter_features(calibration, images_path, cam_info, intrinsic_img, distortio
                                  [0.0,   0.0,        1.0]])
 
     distCoeff = np.zeros((12, 1))
-
-    if cam_info["name"] in intrinsic_img:
-        raise RuntimeError('This is broken')
-        all_features, all_ids, filtered_images = calibration.remove_features(filtered_features, filtered_ids, intrinsic_img[cam_info["name"]], image_files)
-    else:
-        filtered_images = images_path
-
-    current_time = time.time()
-    print("Filtering corners")
-    removed_features, filtered_features, filtered_ids, cameraIntrinsics, distCoeff = calibration.filtering_features(all_features, all_ids, cam_info["name"], cam_info['imsize'], cam_info["hfov"], cameraIntrinsics, distCoeff, distortion_model)
-
-    if filtered_features is None:
-        raise RuntimeError('Exception') # TODO : Handle
-
-    print(f"Filtering takes: {time.time()-current_time}")
-    
-    cam_info['filtered_ids'] = filtered_ids
-    cam_info['filtered_corners'] = filtered_features
     cam_info['intrinsics'] = cameraIntrinsics
     cam_info['dist_coeff'] = distCoeff
+    
+    return cam_info, all_features, all_ids
 
+def estimate_pose_and_filter(calibration, cam_info, allCorners, allIds):
+    hfov = cam_info['hfov']
+    imsize = cam_info['imsize']
+     # check if there are any suspicious corners with high reprojection error
+    index = 0
+    max_threshold = 75 + calibration.initial_max_threshold * (hfov / 30 + imsize[1] / 800 * 0.2)
+    threshold_stepper = int(1.5 * (hfov / 30 + imsize[1] / 800))
+    if threshold_stepper < 1:
+        threshold_stepper = 1
+    print(threshold_stepper)
+    min_inliers = 1 - calibration.initial_min_filtered * (hfov / 60 + imsize[1] / 800 * 0.2)
+    overall_pose = time.time()
+    for index, corners in enumerate(allCorners):
+        if len(corners) < 4:
+            raise RuntimeError(f"Less than 4 corners detected on {index} image.")
+    current = time.time()
+    
+    filtered_corners = []
+    filtered_ids = []
+    removed_corners = []
+        
+    
+    #for corners, ids in zip(allCorners, allIds):
+    current = time.time()
+    
+    with multiprocessing.Pool(processes=16) as pool:
+        results = pool.map(func=estimate_pose_and_filter_single, iterable=[(calibration, a, b, cam_info['intrinsics'], cam_info['dist_coeff'], min_inliers, max_threshold, threshold_stepper) for a, b in zip(allCorners, allIds)])
+
+    filtered_ids, filtered_corners, removed_corners = zip(*results)
+
+    print(f"Overall pose estimation {time.time() - overall_pose}s")
+
+    if sum([len(corners) < 4 for corners in filtered_corners]) > 0.15 * len(allCorners):
+        raise RuntimeError(f"More than 1/4 of images has less than 4 corners for {cam_info['name']}")
+    print(f"Filtering {time.time() -current}s")
+
+    cam_info['filtered_ids'] = filtered_ids
+    cam_info['filtered_corners'] = filtered_corners
+    return cam_info
+
+def calibrate_charuco(calibration, cam_info):
+    distortion_flags = calibration.get_distortion_flags(cam_info['distortion_model'])
+    flags = cv2.CALIB_USE_INTRINSIC_GUESS + distortion_flags
+            
+    try:
+        (ret, camera_matrix, distortion_coefficients,
+                 rotation_vectors, translation_vectors,
+                 stdDeviationsIntrinsics, stdDeviationsExtrinsics,
+                 perViewErrors) = cv2.aruco.calibrateCameraCharucoExtended(
+                    charucoCorners=cam_info['filtered_corners'],
+                    charucoIds=cam_info['filtered_ids'],
+                    board=calibration._board,
+                    imageSize=cam_info['imsize'],
+                    cameraMatrix=cam_info['intrinsics'],
+                    distCoeffs=cam_info['dist_coeff'],
+                    flags=flags,
+                    criteria=(cv2.TERM_CRITERIA_EPS & cv2.TERM_CRITERIA_COUNT, 1000, 1e-6))
+    except:
+        return f"First intrisic calibration failed for {cam_info['imsize']}", None, None
+
+    cam_info['intrinsics'] = camera_matrix
+    cam_info['dist_coeff'] = distortion_coefficients
     return cam_info
 
 def filter_features_fisheye(calibration, images_path, cam_info, intrinsic_img, all_features, all_ids):
@@ -328,7 +370,8 @@ class StereoCalibration(object):
                 if self._cameraModel == "fisheye":
                     cam_info = filter_features_fisheye(self, cam_info['images_path'], cam_info, intrinsic_img, all_features, all_ids)
                 else:
-                    cam_info = filter_features(self, cam_info['images_path'], cam_info, intrinsic_img, cam_info['distortion_model'], all_features, all_ids)
+                    cam_info = estimate_pose_and_filter(self, cam_info, all_features, all_ids)
+                    cam_info = calibrate_charuco(self, cam_info)
                 cam_info = calibrate_ccm_intrinsics_per_ccm(self, features, cam_info)
         else:
             for cam, cam_info in activeCameras:
