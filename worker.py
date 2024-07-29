@@ -40,7 +40,6 @@ class ParallelTask:
     for arg in self._args:
       if isinstance(arg, Retvals):
         rev = arg.get()
-        print('got retval', rev)
         newargs.extend(rev)
       else:
         newargs.append(arg)
@@ -125,7 +124,6 @@ def worker_controller(_stop: multiprocessing.Event, _in: multiprocessing.Queue, 
       task: ParallelTask | None = _in.get(timeout=0.1)
     except queue.Empty:
       continue
-    print(task._args, task._kwargs)
     retvals = task._fun(*task._args, **task._kwargs)
     _out.put((task._id, retvals))
 

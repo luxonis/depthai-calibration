@@ -23,6 +23,7 @@ from typing import Optional
 import matplotlib.pyplot as plt
 from scipy.interpolate import griddata
 plt.rcParams.update({'font.size': 16})
+from .worker import ParallelTask, ParallelTaskGroup, ParallelWorker
 import matplotlib.colors as colors
 import logging
 logging.getLogger('matplotlib').setLevel(logging.WARNING)
@@ -348,19 +349,30 @@ class StereoCalibration(object):
         for cam, cam_info in activeCameras:
             cam_info = load_camera_data(self, filepath, cam_info, self._cameraModel, self.ccm_model, self.model, charucos, resizeWidth, resizeHeight)
 
+        tasks = []
+        camInfos = []
         if per_ccm:
             for cam, cam_info in activeCameras:
-                cam_info, all_features, all_ids = get_features(self, features, charucos[cam_info['name']], cam_info)
+                ret = ParallelTask(get_features, [self, features, charucos[cam_info['name']], cam_info])
                 if self._cameraModel == "fisheye":
-                    cam_info = filter_features_fisheye(self, cam_info, intrinsic_img, all_features, all_ids)
+                    ret2 = ParallelTask(filter_features_fisheye, [self, ret[0], intrinsic_img, ret[1], ret[2]])
                 else:
-                    filtered_corners, filtered_ids = estimate_pose_and_filter(self, cam_info, all_features, all_ids)
+                    featuresAndIds = ParallelTask(estimate_pose_and_filter, [self, *ret])
                     
-                    cam_info = calibrate_charuco(self, cam_info, filtered_corners, filtered_ids)
-                cam_info = calibrate_ccm_intrinsics_per_ccm(self, features, cam_info, filtered_corners, filtered_ids)
+                    ret2 = ParallelTask(calibrate_charuco, [self, ret[0], *featuresAndIds])
+                ret3 = ParallelTask(calibrate_ccm_intrinsics_per_ccm, [self, features, *ret2, *featuresAndIds])
+                tasks.extend([ret, ret2, ret3, featuresAndIds])
+                camInfos.append((cam, ret3))
         else:
             for cam, cam_info in activeCameras:
                 cam_info = calibrate_ccm_intrinsics(self, cam_info, charucos[cam_info['name']])
+
+        pw = ParallelWorker(16)
+        pw.execute(tasks)
+
+        for cam, cam_info in camInfos:
+            board_config['cameras'][cam] = cam_info.retvals
+            
 
         for left, right in stereoPairs:
             calibrate_stereo_pair(self, left, right, board_config, features)
