@@ -1,11 +1,13 @@
-from typing import Dict, Any, Callable, Iterable
+from typing import Dict, Any, Callable, Iterable, TypeVar, Generic
 from collections.abc import Iterable
 import multiprocessing
 import random
 import queue
 
-class ParallelTask:
-  def __init__(self, fun: Callable[[Any], Any], args: Iterable[Any] = (), kwargs: Dict[str, Any] = {}):
+R = TypeVar('R')
+
+class ParallelTask(Generic[R]):
+  def __init__(self, fun: Callable[..., R], args: Iterable[Any] = (), kwargs: Dict[str, Any] = {}):
     self._fun = fun
     self._args = args
     self._kwargs = kwargs
@@ -17,13 +19,13 @@ class ParallelTask:
 
   # For accessing task return values
   def __iter__(self):
-    yield Retvals(task=self)
+    yield Retvals[R](task=self)
 
   def __getitem__(self, key):
-    return Retvals(task=self, key=key)
+    return Retvals[R](task=self, key=key)
 
   @property
-  def retvals(self):
+  def retvals(self) -> R:
     return self._retvals
 
   def _canExecute(self) -> bool:
@@ -74,7 +76,7 @@ class ParallelTaskGroup:
   def __getitem__(self, key):
     return Retvals(taskGroup=self, key=key)
 
-class Retvals:
+class Retvals(Generic[R]):
   def __init__(self, task: ParallelTask = None, taskGroup: ParallelTaskGroup = None, key: slice | tuple | int = None):
     self._task = task
     self._taskGroup = taskGroup
@@ -89,7 +91,7 @@ class Retvals:
           return False
       return True
 
-  def get(self) -> Any | Iterable[Any]:
+  def get(self) -> R:
     if self._task:
       if self._key is None:
         if isinstance(self._task._retvals, tuple):
