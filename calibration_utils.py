@@ -142,8 +142,8 @@ def estimate_pose_and_filter_single(calibration, corners, ids, K, d, min_inliers
         #removed_corners.extend(corners2[removed_mask])
         return valid_ids.reshape(-1, 1).astype(np.int32), corners2[valid_mask].reshape(-1, 1, 2), corners2[removed_mask]
 
-def get_features(calibration, images_path, width, height, features, charucos, cam_info):
-    all_features, all_ids, imsize = calibration.getting_features(images_path, width, height, features=features, charucos=charucos)
+def get_features(calibration, features, charucos, cam_info):
+    all_features, all_ids, imsize = calibration.getting_features(cam_info['images_path'], cam_info['width'], cam_info['height'], features=features, charucos=charucos)
 
     if isinstance(all_features, str) and all_ids is None:
         raise RuntimeError(f'Exception {all_features}') # TODO : Handle
@@ -210,7 +210,7 @@ def calibrate_charuco(calibration, cam_info, filteredCorners, filteredIds):
     cam_info['filtered_ids'] = filteredIds
     return cam_info
 
-def filter_features_fisheye(calibration, images_path, cam_info, intrinsic_img, all_features, all_ids):
+def filter_features_fisheye(calibration, cam_info, intrinsic_img, all_features, all_ids):
     f = cam_info['imsize'][0] / (2 * np.tan(np.deg2rad(cam_info["hfov"]/2)))
     print("INTRINSIC CALIBRATION")
     cameraIntrinsics = np.array([[f,    0.0,      cam_info['imsize'][0]/2],
@@ -223,7 +223,7 @@ def filter_features_fisheye(calibration, images_path, cam_info, intrinsic_img, a
         raise RuntimeError('This is broken')
         all_features, all_ids, filtered_images = calibration.remove_features(filtered_features, filtered_ids, intrinsic_img[cam_info["name"]], image_files)
     else:
-        filtered_images = images_path
+        filtered_images = cam_info['images_path']
 
     filtered_features = all_features
     filtered_ids = all_ids
@@ -350,9 +350,9 @@ class StereoCalibration(object):
 
         if per_ccm:
             for cam, cam_info in activeCameras:
-                cam_info, all_features, all_ids = get_features(self, cam_info['images_path'], cam_info['width'], cam_info['height'], features, charucos[cam_info['name']], cam_info)
+                cam_info, all_features, all_ids = get_features(self, features, charucos[cam_info['name']], cam_info)
                 if self._cameraModel == "fisheye":
-                    cam_info = filter_features_fisheye(self, cam_info['images_path'], cam_info, intrinsic_img, all_features, all_ids)
+                    cam_info = filter_features_fisheye(self, cam_info, intrinsic_img, all_features, all_ids)
                 else:
                     filtered_corners, filtered_ids = estimate_pose_and_filter(self, cam_info, all_features, all_ids)
                     
