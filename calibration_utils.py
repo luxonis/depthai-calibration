@@ -144,19 +144,20 @@ def estimate_pose_and_filter_single(args):
         #removed_corners.extend(corners2[removed_mask])
         return valid_ids.reshape(-1, 1).astype(np.int32), corners2[valid_mask].reshape(-1, 1, 2), corners2[removed_mask]
 
-def get_and_filter_features(calibration, images_path, width, height, features, charucos, cam_info, intrinsic_img, _cameraModel, distortion_model):
-    start = time.time()
-    print('starting getting and filtering')
+def get_features(calibration, images_path, width, height, features, charucos, cam_info):
     all_features, all_ids, imsize = calibration.getting_features(images_path, width, height, features=features, charucos=charucos)
 
     if isinstance(all_features, str) and all_ids is None:
         raise RuntimeError(f'Exception {all_features}') # TODO : Handle
     cam_info["imsize"] = imsize
+    
+    return cam_info, all_features, all_ids
 
-    f = imsize[0] / (2 * np.tan(np.deg2rad(cam_info["hfov"]/2)))
+def filter_features(calibration, images_path, cam_info, intrinsic_img, _cameraModel, distortion_model, all_features, all_ids):
+    f = cam_info['imsize'][0] / (2 * np.tan(np.deg2rad(cam_info["hfov"]/2)))
     print("INTRINSIC CALIBRATION")
-    cameraIntrinsics = np.array([[f,    0.0,      imsize[0]/2],
-                                 [0.0,     f,      imsize[1]/2],
+    cameraIntrinsics = np.array([[f,    0.0,      cam_info['imsize'][0]/2],
+                                 [0.0,     f,      cam_info['imsize'][1]/2],
                                  [0.0,   0.0,        1.0]])
 
     distCoeff = np.zeros((12, 1))
@@ -170,7 +171,7 @@ def get_and_filter_features(calibration, images_path, width, height, features, c
     current_time = time.time()
     if _cameraModel != "fisheye":
         print("Filtering corners")
-        removed_features, filtered_features, filtered_ids, cameraIntrinsics, distCoeff = calibration.filtering_features(all_features, all_ids, cam_info["name"],imsize,cam_info["hfov"], cameraIntrinsics, distCoeff, distortion_model)
+        removed_features, filtered_features, filtered_ids, cameraIntrinsics, distCoeff = calibration.filtering_features(all_features, all_ids, cam_info["name"], cam_info['imsize'], cam_info["hfov"], cameraIntrinsics, distCoeff, distortion_model)
 
         if filtered_features is None:
             raise RuntimeError('Exception') # TODO : Handle
@@ -179,7 +180,6 @@ def get_and_filter_features(calibration, images_path, width, height, features, c
     else:
         filtered_features = all_features
         filtered_ids = all_ids
-    print(f'getting and filtering took {round(time.time() - start, 2)}s')
     
     cam_info['filtered_ids'] = filtered_ids
     cam_info['filtered_corners'] = filtered_features
@@ -303,7 +303,8 @@ class StereoCalibration(object):
 
         if per_ccm:
             for cam, cam_info in activeCameras:
-                cam_info = get_and_filter_features(self, cam_info['images_path'], cam_info['width'], cam_info['height'], features, charucos[cam_info['name']], cam_info, intrinsic_img, self._cameraModel, cam_info['distortion_model'])
+                cam_info, all_features, all_ids = get_features(self, cam_info['images_path'], cam_info['width'], cam_info['height'], features, charucos[cam_info['name']], cam_info)
+                cam_info = filter_features(self, cam_info['images_path'], cam_info, intrinsic_img, self._cameraModel, cam_info['distortion_model'], all_features, all_ids)
                 cam_info = calibrate_ccm_intrinsics_per_ccm(self, features, cam_info)
         else:
             for cam, cam_info in activeCameras:
