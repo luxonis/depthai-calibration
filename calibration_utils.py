@@ -6,9 +6,13 @@ import os
 import shutil
 import numpy as np
 from scipy.spatial.transform import Rotation
+import multiprocessing
+from multiprocessing.pool import ThreadPool
+
 import time
 import json
 import cv2.aruco as aruco
+import threading
 import logging
 logging.getLogger('matplotlib').setLevel(logging.WARNING)
 
@@ -19,6 +23,7 @@ from typing import Optional
 import matplotlib.pyplot as plt
 from scipy.interpolate import griddata
 plt.rcParams.update({'font.size': 16})
+from .worker import ParallelTask, ParallelTaskGroup, ParallelWorker
 import matplotlib.colors as colors
 import logging
 logging.getLogger('matplotlib').setLevel(logging.WARNING)
@@ -34,35 +39,40 @@ cdict = {'red':  ((0.0, 0.0, 0.0),   # no red at 0
           (0.5, 1.0, 1.0),   # all channels set to 1.0 at 0.5 to create white
           (1.0, 0.0, 0.0))   # no blue at 1
 }
-# Create the colormap using the dictionary
-GnRd = colors.LinearSegmentedColormap('GnRd', cdict)
-def get_quadrant_coordinates(width, height, nx, ny):
-    quadrant_width = width // nx
-    quadrant_height = height // ny
-    quadrant_coords = []
-    
-    for i in range(int(nx)):
-        for j in range(int(ny)):
-            left = i * quadrant_width
-            upper = j * quadrant_height
-            right = left + quadrant_width
-            bottom = upper + quadrant_height
-            quadrant_coords.append((left, upper, right, bottom))
-    
-    return quadrant_coords
+initial_max_threshold = 15
+initial_min_filtered = 0.05
+calibration_max_threshold = 10
 
-def sort_points_into_quadrants(points, width, height, error, nx = 4, ny = 4):
-    quadrant_coords = get_quadrant_coordinates(width, height, nx, ny)
-    quadrants = {i: [] for i in range(int(nx*ny))}  # Create a dictionary to store points by quadrant index
+class ProxyDict:
+  def __init__(self, squaresX, squaresY, squareSize, markerSize, dictSize):
+    self.squaresX = squaresX
+    self.squaresY = squaresY
+    self.squareSize = squareSize
+    self.markerSize = markerSize
+    self.dictSize = dictSize
 
-    for x, y in points:
-        # Find the correct quadrant for each point
-        for index, (left, upper, right, bottom) in enumerate(quadrant_coords):
-            if left <= x < right and upper <= y < bottom:
-                quadrants[index].append(error[index])
-                break
-            
-    return quadrants, quadrant_coords
+  def __getstate__(self):
+      state = self.__dict__.copy()
+      for hidden in ['_board', '_dictionary']:
+        if hidden in state:
+          del state[hidden]
+      return state
+
+  def __build(self):
+    self._dictionary = aruco.Dictionary_get(self.dictSize)
+    self._board = aruco.CharucoBoard_create(self.squaresX, self.squaresY, self.squareSize, self.markerSize, self._dictionary)
+
+  @property
+  def dictionary(self):
+    if not hasattr(self, '_dictionary'):
+      self.__build()
+    return self._dictionary
+
+  @property
+  def board(self):
+    if not hasattr(self, '_board'):
+      self.__build()
+    return self._board
 
 def distance(point1, point2):
     return np.sqrt((point1[0] - point2[0])**2 + (point1[1] - point2[1])**2)
@@ -70,73 +80,6 @@ def distance(point1, point2):
 rectProjectionMode = 0
 
 colors = [(0, 255 , 0), (0, 0, 255)]
-def setPolygonCoordinates(height, width):
-    horizontal_shift = width//4
-    vertical_shift = height//4
-
-    margin = 60
-    slope = 150
-
-    p_coordinates = [
-        [[margin, margin], [margin, height-margin],
-            [width-margin, height-margin], [width-margin, margin]],
-
-        [[margin, 0], [margin, height], [width//2, height-slope], [width//2, slope]],
-        [[horizontal_shift, 0], [horizontal_shift, height], [
-            width//2 + horizontal_shift, height-slope], [width//2 + horizontal_shift, slope]],
-        [[horizontal_shift*2-margin, 0], [horizontal_shift*2-margin, height], [width//2 +
-                                                                               horizontal_shift*2-margin, height-slope], [width//2 + horizontal_shift*2-margin, slope]],
-
-        [[width-margin, 0], [width-margin, height],
-            [width//2, height-slope], [width//2, slope]],
-        [[width-horizontal_shift, 0], [width-horizontal_shift, height], [width //
-                                                                         2-horizontal_shift, height-slope], [width//2-horizontal_shift, slope]],
-        [[width-horizontal_shift*2+margin, 0], [width-horizontal_shift*2+margin, height], [width //
-                                                                                           2-horizontal_shift*2+margin, height-slope], [width//2-horizontal_shift*2+margin, slope]],
-
-        [[0, margin], [width, margin], [
-            width-slope, height//2], [slope, height//2]],
-        [[0, vertical_shift], [width, vertical_shift], [width-slope,
-                                                        height//2+vertical_shift], [slope, height//2+vertical_shift]],
-        [[0, vertical_shift*2-margin], [width, vertical_shift*2-margin], [width-slope,
-                                                                          height//2+vertical_shift*2-margin], [slope, height//2+vertical_shift*2-margin]],
-
-        [[0, height-margin], [width, height-margin],
-         [width-slope, height//2], [slope, height//2]],
-        [[0, height-vertical_shift], [width, height-vertical_shift], [width -
-                                                                      slope, height//2-vertical_shift], [slope, height//2-vertical_shift]],
-        [[0, height-vertical_shift*2+margin], [width, height-vertical_shift*2+margin], [width -
-                                                                                        slope, height//2-vertical_shift*2+margin], [slope, height//2-vertical_shift*2+margin]]
-    ]
-    return p_coordinates
-
-
-def getPolygonCoordinates(idx, p_coordinates):
-    return p_coordinates[idx]
-
-
-def getNumOfPolygons(p_coordinates):
-    return len(p_coordinates)
-
-# Filters polygons to just those at the given indexes.
-
-
-def select_polygon_coords(p_coordinates, indexes):
-    if indexes == None:
-        # The default
-        return p_coordinates
-    else:
-        print("Filtering polygons to those at indexes=", indexes)
-        return [p_coordinates[i] for i in indexes]
-
-
-def image_filename(polygon_index, total_num_of_captured_images):
-    return "p{polygon_index}_{total_num_of_captured_images}.png".format(polygon_index=polygon_index, total_num_of_captured_images=total_num_of_captured_images)
-
-
-def polygon_from_image_name(image_name):
-    """Returns the polygon index from an image name (ex: "left_p10_0.png" => 10)"""
-    return int(re.findall("p(\d+)", image_name)[0])
 
 class StereoExceptions(Exception):
     def __init__(self, message, stage, path=None, *args, **kwargs) -> None:
@@ -151,6 +94,192 @@ class StereoExceptions(Exception):
         """
         return f"'{self.args[0]}' (occured during stage '{self.stage}')"
 
+def estimate_pose_and_filter_single(calibration, corners, ids, K, d, min_inliers, max_threshold, threshold_stepper):
+    board = calibration._board
+    
+    objpoints = np.array([board.chessboardCorners[id] for id in ids], dtype=np.float32)
+    
+    ini_threshold=5
+    threshold = None
+    
+    objects = []
+    all_objects = []
+    while len(objects) < len(objpoints[:,0,0]) * min_inliers:
+        if ini_threshold > max_threshold:
+            break
+        ret, rvec, tvec, objects  = cv2.solvePnPRansac(objpoints, corners, K, d, flags = cv2.SOLVEPNP_P3P, reprojectionError = ini_threshold,  iterationsCount = 10000, confidence = 0.9)
+        all_objects.append(objects)
+        imgpoints2 = objpoints.copy()
+
+        all_corners2 = corners.copy()
+        all_corners2 = np.array([all_corners2[id[0]] for id in objects])
+        imgpoints2 = np.array([imgpoints2[id[0]] for id in objects])
+
+        ret, rvec, tvec = cv2.solvePnP(imgpoints2, all_corners2, K, d)
+        
+        ini_threshold += threshold_stepper
+    if not ret:
+        raise RuntimeError('Exception') # TODO : Handle
+    
+    if ids is not None and corners.size > 0:
+        ids = ids.flatten()  # Flatten the IDs from 2D to 1D
+        imgpoints2, _ = cv2.projectPoints(objpoints, rvec, tvec, K, d)
+        corners2 = corners.reshape(-1, 2)
+        imgpoints2 = imgpoints2.reshape(-1, 2)
+
+        errors = np.linalg.norm(corners2 - imgpoints2, axis=1)
+        if threshold == None:
+            threshold = max(2*np.median(errors), 150)
+        valid_mask = errors <= threshold
+        removed_mask = ~valid_mask
+
+        # Collect valid IDs in the original format (array of arrays)
+        valid_ids = ids[valid_mask]
+        #filtered_ids.append(valid_ids.reshape(-1, 1).astype(np.int32))  # Reshape and store as array of arrays
+
+        # Collect data for valid points
+        #filtered_corners.append(corners2[valid_mask].reshape(-1, 1, 2))   # Collect valid corners for calibration
+
+        #removed_corners.extend(corners2[removed_mask])
+        return valid_ids.reshape(-1, 1).astype(np.int32), corners2[valid_mask].reshape(-1, 1, 2), corners2[removed_mask]
+
+def get_features(calibration, features, charucos, cam_info):
+    all_features, all_ids, imsize = calibration.getting_features(cam_info['images_path'], cam_info['width'], cam_info['height'], features=features, charucos=charucos)
+
+    if isinstance(all_features, str) and all_ids is None:
+        raise RuntimeError(f'Exception {all_features}') # TODO : Handle
+    cam_info["imsize"] = imsize
+    f = cam_info['imsize'][0] / (2 * np.tan(np.deg2rad(cam_info["hfov"]/2)))
+    print("INTRINSIC CALIBRATION")
+    cameraIntrinsics = np.array([[f,    0.0,      cam_info['imsize'][0]/2],
+                                 [0.0,     f,      cam_info['imsize'][1]/2],
+                                 [0.0,   0.0,        1.0]])
+
+    distCoeff = np.zeros((12, 1))
+    cam_info['intrinsics'] = cameraIntrinsics
+    cam_info['dist_coeff'] = distCoeff
+    
+     # check if there are any suspicious corners with high reprojection error
+    max_threshold = 75 + calibration.initial_max_threshold * (cam_info['hfov']/ 30 + cam_info['imsize'][1] / 800 * 0.2)
+    threshold_stepper = int(1.5 * (cam_info['hfov'] / 30 + cam_info['imsize'][1] / 800))
+    if threshold_stepper < 1:
+        threshold_stepper = 1
+    min_inliers = 1 - calibration.initial_min_filtered * (cam_info['hfov'] / 60 + cam_info['imsize'][1] / 800 * 0.2)
+    cam_info['max_threshold'] = max_threshold
+    cam_info['threshold_stepper'] = threshold_stepper
+    cam_info['min_inliers'] = min_inliers
+    
+    return cam_info, all_features, all_ids
+
+def estimate_pose_and_filter(calibration, cam_info, allCorners, allIds):
+    filtered_corners = []
+    filtered_ids = []
+    for a, b in zip(allCorners, allIds):
+        ids, corners, _ = estimate_pose_and_filter_single(calibration, a, b, cam_info['intrinsics'], cam_info['dist_coeff'], cam_info['min_inliers'], cam_info['max_threshold'], cam_info['threshold_stepper'])
+        filtered_corners.append(corners)
+        filtered_ids.append(ids)
+
+    return filtered_corners, filtered_ids
+
+
+def calibrate_charuco(calibration, cam_info, filteredCorners, filteredIds):
+    if sum([len(corners) < 4 for corners in filteredCorners]) > 0.15 * len(filteredCorners):
+        raise RuntimeError(f"More than 1/4 of images has less than 4 corners for {cam_info['name']}")
+
+    distortion_flags = calibration.get_distortion_flags(cam_info['distortion_model'])
+    flags = cv2.CALIB_USE_INTRINSIC_GUESS + distortion_flags
+            
+    try:
+        (ret, camera_matrix, distortion_coefficients,
+                 rotation_vectors, translation_vectors,
+                 stdDeviationsIntrinsics, stdDeviationsExtrinsics,
+                 perViewErrors) = cv2.aruco.calibrateCameraCharucoExtended(
+                    charucoCorners=filteredCorners,
+                    charucoIds=filteredIds,
+                    board=calibration._board,
+                    imageSize=cam_info['imsize'],
+                    cameraMatrix=cam_info['intrinsics'],
+                    distCoeffs=cam_info['dist_coeff'],
+                    flags=flags,
+                    criteria=(cv2.TERM_CRITERIA_EPS & cv2.TERM_CRITERIA_COUNT, 1000, 1e-6))
+    except:
+        return f"First intrisic calibration failed for {cam_info['imsize']}", None, None
+
+    cam_info['intrinsics'] = camera_matrix
+    cam_info['dist_coeff'] = distortion_coefficients
+    cam_info['filtered_corners'] = filteredCorners
+    cam_info['filtered_ids'] = filteredIds
+    return cam_info
+
+def filter_features_fisheye(calibration, cam_info, intrinsic_img, all_features, all_ids):
+    f = cam_info['imsize'][0] / (2 * np.tan(np.deg2rad(cam_info["hfov"]/2)))
+    print("INTRINSIC CALIBRATION")
+    cameraIntrinsics = np.array([[f,    0.0,      cam_info['imsize'][0]/2],
+                                 [0.0,     f,      cam_info['imsize'][1]/2],
+                                 [0.0,   0.0,        1.0]])
+
+    distCoeff = np.zeros((12, 1))
+
+    if cam_info["name"] in intrinsic_img:
+        raise RuntimeError('This is broken')
+        all_features, all_ids, filtered_images = calibration.remove_features(filtered_features, filtered_ids, intrinsic_img[cam_info["name"]], image_files)
+    else:
+        filtered_images = cam_info['images_path']
+
+    filtered_features = all_features
+    filtered_ids = all_ids
+    
+    cam_info['filtered_ids'] = filtered_ids
+    cam_info['filtered_corners'] = filtered_features
+    cam_info['intrinsics'] = cameraIntrinsics
+    cam_info['dist_coeff'] = distCoeff
+
+    return cam_info
+
+def calibrate_ccm_intrinsics_per_ccm(calibration, features, cam_info, filtered_corners, filtered_ids):
+    start = time.time()
+    print('starting calibrate_wf')
+    ret, cameraIntrinsics, distCoeff, _, _, filtered_ids, filtered_corners, size, coverageImage, all_corners, all_ids = calibration.calibrate_wf_intrinsics(cam_info["name"], filtered_corners, filtered_ids, cam_info["imsize"], cam_info["hfov"], features, cam_info['calib_model'], cam_info['distortion_model'], cam_info['intrinsics'], cam_info['dist_coeff'])
+    if isinstance(ret, str) and all_ids is None:
+        raise RuntimeError('Exception' + ret) # TODO : Handle
+    print(f'calibrate_wf took {round(time.time() - start, 2)}s')
+
+    cam_info['intrinsics'] = cameraIntrinsics
+    cam_info['dist_coeff'] = distCoeff
+    cam_info['size'] = size # (Width, height)
+    cam_info['reprojection_error'] = ret
+    print("Reprojection error of {0}: {1}".format(
+        cam_info['name'], ret))
+
+    return cam_info
+
+def calibrate_ccm_intrinsics(calibration, cam_info, charucos):
+    ret, cameraIntrinsics, distCoeff, _, _, filtered_ids, filtered_corners, size, coverageImage, all_corners, all_ids = calibration.calibrate_intrinsics(
+        cam_info['images_path'], cam_info['hfov'], cam_info["name"], charucos, cam_info['width'], cam_info['height'], cam_info['calib_model'], cam_info['distortion_model'])
+    cam_info['filtered_ids'] = filtered_ids
+    cam_info['filtered_corners'] = filtered_corners
+
+    cam_info['intrinsics'] = cameraIntrinsics
+    cam_info['dist_coeff'] = distCoeff
+    cam_info['size'] = size # (Width, height)
+    cam_info['reprojection_error'] = ret
+    print("Reprojection error of {0}: {1}".format(
+        cam_info['name'], ret))
+
+    return cam_info
+
+def calibrate_stereo_pair(calibration, left, right, board_config, features):
+    calibration.calibrate_stereo_pair(left, right, board_config, features)
+
+def load_camera_data(calibration, filepath, cam_info, _cameraModel, ccm_model, model, charucos, resizeWidth, resizeHeight):
+    width, height, img_path, calib_model, distortion_model, images_path = calibration.load_camera_data(filepath, cam_info, _cameraModel, ccm_model, model, charucos, resizeWidth, resizeHeight)
+    cam_info['width'] = width
+    cam_info['height'] = height
+    cam_info['calib_model'] = calib_model
+    cam_info['distortion_model'] = distortion_model
+    cam_info["img_path"] = img_path
+    cam_info['images_path'] = images_path
+    return cam_info
 
 class StereoCalibration(object):
     """Class to Calculate Calibration and Rectify a Stereo Camera."""
@@ -159,10 +288,8 @@ class StereoCalibration(object):
         self.filtering_enable = filtering_enable
         self.ccm_model = distortion_model
         self.model = model
-        self.traceLevel = traceLevel
         self.output_scale_factor = outputScaleFactor
         self.disableCamera = disableCamera
-        self.errors = {}
         self.initial_max_threshold = initial_max_threshold
         self.initial_min_filtered = initial_min_filtered
         self.calibration_max_threshold = calibration_max_threshold
@@ -170,13 +297,18 @@ class StereoCalibration(object):
 
         """Class to Calculate Calibration and Rectify a Stereo Camera."""
 
+    @property
+    def _aruco_dictionary(self):
+        return self._proxyDict.dictionary
+
+    @property
+    def _board(self):
+        return self._proxyDict.board
+
     def calibrate(self, board_config, filepath, square_size, mrk_size, squaresX, squaresY, camera_model, enable_disp_rectify, charucos = {}, intrinsic_img = {}, extrinsic_img = []):
         """Function to calculate calibration for stereo camera."""
         start_time = time.time()
         # init object data
-        if self.traceLevel == 2 or self.traceLevel == 10:
-            print(f'squareX is {squaresX}')
-        self.enable_rectification_disp = True
         if intrinsic_img != {}:
             for cam in intrinsic_img:
                 intrinsic_img[cam].sort(reverse=True)
@@ -185,347 +317,248 @@ class StereoCalibration(object):
                 extrinsic_img[cam].sort(reverse=True)
         self.intrinsic_img = intrinsic_img
         self.extrinsic_img = extrinsic_img
-        self.cameraModel = camera_model
-        self.cameraIntrinsics = {}
-        self.cameraDistortion = {}
-        self.distortion_model = {}
-        self.calib_model = {}
-        self.collected_features = {}
-        self.collected_ids = {}
-        self.all_features = {}
-        self.all_errors = {}
-        self.errors = {}
-        self.data_path = filepath
-        self.charucos = charucos 
-        self.aruco_dictionary = aruco.Dictionary_get(aruco.DICT_4X4_1000)
+        self._enable_rectification_disp = True
+        self._cameraModel = camera_model
+        self._data_path = filepath
+        self._proxyDict = ProxyDict(squaresX, squaresY, square_size, mrk_size, aruco.DICT_4X4_1000)
         self.squaresX = squaresX
         self.squaresY = squaresY
-        self.board = aruco.CharucoBoard_create(
-            # 22, 16,
-            squaresX, squaresY,
-            square_size,
-            mrk_size,
-            self.aruco_dictionary)
+        self.squareSize = square_size
+        self.markerSize = mrk_size
 
         self.cams = []
-        # parameters = aruco.DetectorParameters_create()
-        combinedCoverageImage = None
+        features = None
+
         resizeWidth, resizeHeight = 1280, 800
-        self.height = {}
-        self.width = {}
-        assert mrk_size != None,  "ERROR: marker size not set"
-        for camera in board_config['cameras'].keys():
-            cam_info = board_config['cameras'][camera]
-            if cam_info["name"] not in self.disableCamera:
-                images_path = filepath + '/' + cam_info['name']
-                image_files = glob.glob(images_path + "/*")
-                image_files.sort()
-                for im in image_files:
-                    frame = cv2.imread(im)
-                    self.height[cam_info["name"]], self.width[cam_info["name"]], _ = frame.shape
-                    widthRatio = resizeWidth / self.width[cam_info["name"]]
-                    heightRatio = resizeHeight / self.height[cam_info["name"]]
-                    if (widthRatio > 0.8 and heightRatio > 0.8 and widthRatio <= 1.0 and heightRatio <= 1.0) or (widthRatio > 1.2 and heightRatio > 1.2) or (resizeHeight == 0):
-                        resizeWidth = self.width[cam_info["name"]]
-                        resizeHeight = self.height[cam_info["name"]]
-                    break
-        for camera in board_config['cameras'].keys():
-            cam_info = board_config['cameras'][camera]
-            self.id = cam_info["name"]
-            if cam_info["name"] not in self.disableCamera:
-                print(
-                    '<------------Calibrating {} ------------>'.format(cam_info['name']))
-                images_path = filepath + '/' + cam_info['name']
-                if "calib_model" in cam_info.keys():
-                    self.cameraModel_ccm, self.model_ccm = cam_info["calib_model"].split("_")
-                    if self.cameraModel_ccm == "fisheye":
-                        self.model_ccm == None
-                    self.calib_model[cam_info["name"]] = self.cameraModel_ccm
-                    self.distortion_model[cam_info["name"]] = self.model_ccm
-                else:
-                    self.calib_model[cam_info["name"]] = self.cameraModel
-                    if cam_info["name"] in self.ccm_model:
-                        self.distortion_model[cam_info["name"]] = self.ccm_model[cam_info["name"]]
-                    else:
-                        self.distortion_model[cam_info["name"]] = self.model
-
-
-                features = None
-                self.img_path = glob.glob(images_path + "/*")
-                if charucos == {}:
-                    self.img_path = sorted(self.img_path, key=lambda x: int(x.split('_')[1]))
-                else:
-                    self.img_path.sort()
-                cam_info["img_path"] = self.img_path
-                self.name = cam_info["name"]
-                if per_ccm:
-                    all_features, all_ids, imsize = self.getting_features(images_path, cam_info["name"], features=features)
-                    if isinstance(all_features, str) and all_ids is None:
-                        if cam_info["name"] not in self.errors.keys():
-                            self.errors[cam_info["name"]] = []
-                        self.errors[cam_info["name"]].append(all_features)
-                        continue
-                    cam_info["imsize"] = imsize
-
-                    f = imsize[0] / (2 * np.tan(np.deg2rad(cam_info["hfov"]/2)))
-                    print("INTRINSIC CALIBRATION")
-                    cameraMatrixInit = np.array([[f,    0.0,      imsize[0]/2],
-                                                 [0.0,     f,      imsize[1]/2],
-                                                 [0.0,   0.0,        1.0]])
-                    if cam_info["name"] not in self.cameraIntrinsics.keys():
-                        self.cameraIntrinsics[cam_info["name"]] = cameraMatrixInit
-
-                    if self.traceLevel == 3 or self.traceLevel == 10:
-                        print(
-                            f'Camera Matrix initialization with HFOV of {cam_info["name"]} is.............')
-                        print(cameraMatrixInit)
-                    distCoeffsInit = np.zeros((12, 1))
-                    if cam_info["name"] not in self.cameraDistortion:
-                        self.cameraDistortion[cam_info["name"]] = distCoeffsInit
-
-                    if cam_info["name"] in self.intrinsic_img:
-                        all_features, all_ids, filtered_images = self.remove_features(filtered_features, filtered_ids, self.intrinsic_img[cam_info["name"]], image_files)
-                    else:
-                        filtered_images = images_path
-                    current_time = time.time()
-                    if self.cameraModel != "fisheye":
-                        print("Filtering corners")
-                        removed_features, filtered_features, filtered_ids = self.filtering_features(all_features, all_ids, cam_info["name"],imsize,cam_info["hfov"], cameraMatrixInit, distCoeffsInit)
-
-                        if filtered_features is None:
-                            if cam_info["name"] not in self.errors.keys():
-                                self.errors[cam_info["name"]] = []
-                            self.errors[cam_info["name"]].append(removed_features)
-                            continue
-
-                        print(f"Filtering takes: {time.time()-current_time}")
-                        if  cam_info["name"] not in self.collected_features.keys():
-                            self.collected_features[cam_info["name"]] = filtered_features
-                        if  cam_info["name"] not in self.collected_ids.keys():
-                            self.collected_ids[cam_info["name"]] = filtered_ids
-                    else:
-                        filtered_features = all_features
-                        filtered_ids = all_ids
-
-                    cam_info['filtered_ids'] = filtered_ids
-                    cam_info['filtered_corners'] = filtered_features
-
-                    ret, intrinsics, dist_coeff, _, _, filtered_ids, filtered_corners, size, coverageImage, all_corners, all_ids = self.calibrate_wf_intrinsics(cam_info["name"], all_features, all_ids, filtered_features, filtered_ids, cam_info["imsize"], cam_info["hfov"], features, filtered_images)
-                    if isinstance(ret, str) and all_ids is None:
-                        if cam_info["name"] not in self.errors.keys():
-                            self.errors[cam_info["name"]] = []
-                        self.errors[cam_info["name"]].append(ret)
-                        continue
-                else:
-                    ret, intrinsics, dist_coeff, _, _, filtered_ids, filtered_corners, size, coverageImage, all_corners, all_ids = self.calibrate_intrinsics(
-                        images_path, cam_info['hfov'], cam_info["name"])
-                    cam_info['filtered_ids'] = filtered_ids
-                    cam_info['filtered_corners'] = filtered_corners
-                self.cameraIntrinsics[cam_info["name"]] = intrinsics
-                self.cameraDistortion[cam_info["name"]] = dist_coeff
-                cam_info['intrinsics'] = intrinsics
-                cam_info['dist_coeff'] = dist_coeff
-                cam_info['size'] = size # (Width, height)
-                cam_info['reprojection_error'] = ret
-                print("Reprojection error of {0}: {1}".format(
-                    cam_info['name'], ret))
-                if self.traceLevel == 3 or self.traceLevel == 10:
-                    print("Estimated intrinsics of {0}: \n {1}".format(
-                    cam_info['name'], intrinsics))
-                
-                coverage_name = cam_info['name']
-                print_text = f'Coverage Image of {coverage_name} with reprojection error of {round(ret,5)}'
-                height, width, _ = coverageImage.shape
-
-                if width > resizeWidth and height > resizeHeight:
-                    coverageImage = cv2.resize(
-                    coverageImage, (0, 0), fx= resizeWidth / width, fy= resizeWidth / width)
-
-                height, width, _ = coverageImage.shape
-                if height > resizeHeight:
-                    height_offset = (height - resizeHeight)//2
-                    coverageImage = coverageImage[height_offset:height_offset+resizeHeight, :]
-                
-                height, width, _ = coverageImage.shape
-                height_offset = (resizeHeight - height)//2
-                width_offset = (resizeWidth - width)//2
-                subImage = np.pad(coverageImage, ((height_offset, height_offset), (width_offset, width_offset), (0, 0)), 'constant', constant_values=0)
-                cv2.putText(subImage, print_text, (50, 50+height_offset), cv2.FONT_HERSHEY_SIMPLEX, 2*coverageImage.shape[0]/1750, (0, 0, 0), 2)
-                if combinedCoverageImage is None:
-                    combinedCoverageImage = subImage
-                else:
-                    combinedCoverageImage = np.hstack((combinedCoverageImage, subImage))
-                coverage_file_path = filepath + '/' + coverage_name + '_coverage.png'
-                
-                cv2.imwrite(coverage_file_path, subImage)
-        if self.errors != {}:
-            string = ""
-            for key in self.errors.keys():
-                string += self.errors[key][0] + "\n"
-            raise StereoExceptions(message=string, stage="intrinsic")
-
-        combinedCoverageImage = cv2.resize(combinedCoverageImage, (0, 0), fx=self.output_scale_factor, fy=self.output_scale_factor)
-        if enable_disp_rectify:
-            # cv2.imshow('coverage image', combinedCoverageImage)
-            cv2.waitKey(1)
-            cv2.destroyAllWindows()
         
-        for camera in board_config['cameras'].keys():
-            left_cam_info = board_config['cameras'][camera]
-            if str(left_cam_info["name"]) not in self.disableCamera:
-                if 'extrinsics' in left_cam_info:
-                    if 'to_cam' in left_cam_info['extrinsics']:
-                        left_cam = camera
-                        right_cam = left_cam_info['extrinsics']['to_cam']
-                        left_path = filepath + '/' + left_cam_info['name']
-    
-                        right_cam_info = board_config['cameras'][left_cam_info['extrinsics']['to_cam']]
-                        if str(right_cam_info["name"]) not in self.disableCamera:
-                            right_path = filepath + '/' + right_cam_info['name']
-                            print('<-------------Extrinsics calibration of {} and {} ------------>'.format(
-                                left_cam_info['name'], right_cam_info['name']))
-    
-                            specTranslation = left_cam_info['extrinsics']['specTranslation']
-                            rot = left_cam_info['extrinsics']['rotation']
-    
-                            translation = np.array(
-                                [specTranslation['x'], specTranslation['y'], specTranslation['z']], dtype=np.float32)
-                            rotation = Rotation.from_euler(
-                                'xyz', [rot['r'], rot['p'], rot['y']], degrees=True).as_matrix().astype(np.float32)
-                            if per_ccm and extrinsic_per_ccm:
-                                if left_cam_info["name"] in self.extrinsic_img or right_cam_info["name"] in self.extrinsic_img:
-                                    if left_cam_info["name"] in self.extrinsic_img:
-                                        array = self.extrinsic_img[left_cam_info["name"]]
-                                    elif right_cam_info["name"] in self.extrinsic_img:
-                                        array = self.extrinsic_img[left_cam_info["name"]]
-                                    left_cam_info['filtered_corners'], left_cam_info['filtered_ids'], filtered_images = self.remove_features(left_cam_info['filtered_corners'], left_cam_info['filtered_ids'], array)
-                                    right_cam_info['filtered_corners'], right_cam_info['filtered_ids'], filtered_images = self.remove_features(right_cam_info['filtered_corners'], right_cam_info['filtered_ids'], array)
-                                    removed_features, left_cam_info['filtered_corners'], left_cam_info['filtered_ids'] = self.filtering_features(left_cam_info['filtered_corners'], left_cam_info['filtered_ids'], left_cam_info["name"],left_cam_info["imsize"],left_cam_info["hfov"], self.cameraIntrinsics["name"], self.cameraDistortion["name"])
-                                    removed_features, right_cam_info['filtered_corners'], right_cam_info['filtered_ids'] = self.filtering_features(right_cam_info['filtered_corners'], right_cam_info['filtered_ids'], right_cam_info["name"], right_cam_info["imsize"], right_cam_info["hfov"], self.cameraIntrinsics["name"], self.cameraDistortion["name"])
-                            
-                            extrinsics = self.calibrate_stereo(left_cam_info['name'], right_cam_info['name'], left_cam_info['filtered_ids'], left_cam_info['filtered_corners'], right_cam_info['filtered_ids'], right_cam_info['filtered_corners'], left_cam_info['intrinsics'], left_cam_info[
-                                                                   'dist_coeff'], right_cam_info['intrinsics'], right_cam_info['dist_coeff'], translation, rotation, features)
-                            if extrinsics[0] == -1:
-                                return -1, extrinsics[1]
-    
-                            if board_config['stereo_config']['left_cam'] == left_cam and board_config['stereo_config']['right_cam'] == right_cam:
-                                board_config['stereo_config']['rectification_left'] = extrinsics[3]
-                                board_config['stereo_config']['rectification_right'] = extrinsics[4]
+        activeCameras = [(cam, cam_info) for cam, cam_info in board_config['cameras'].items() if not cam_info['name'] in self.disableCamera]
 
-                            elif board_config['stereo_config']['left_cam'] == right_cam and board_config['stereo_config']['right_cam'] == left_cam:
-                                board_config['stereo_config']['rectification_left'] = extrinsics[4]
-                                board_config['stereo_config']['rectification_right'] = extrinsics[3]
-    
-                            """ for stereoObj in board_config['stereo_config']:
-    
-                                if stereoObj['left_cam'] == left_cam and stereoObj['right_cam'] == right_cam and stereoObj['main'] == 1:
-                                    stereoObj['rectification_left'] = extrinsics[3]
-                                    stereoObj['rectification_right'] = extrinsics[4] """
-    
-                            print('<-------------Epipolar error of {} and {} ------------>'.format(
-                                left_cam_info['name'], right_cam_info['name']))
-                            #print(f"dist {left_cam_info['name']}: {left_cam_info['dist_coeff']}")
-                            #print(f"dist {right_cam_info['name']}: {right_cam_info['dist_coeff']}")
-                            if left_cam_info['intrinsics'][0][0] < right_cam_info['intrinsics'][0][0]:
-                                scale = right_cam_info['intrinsics'][0][0]
-                            else:
-                                scale = left_cam_info['intrinsics'][0][0]
-                            if per_ccm and extrinsic_per_ccm:
-                                scale = ((left_cam_info['intrinsics'][0][0]*right_cam_info['intrinsics'][0][0] + left_cam_info['intrinsics'][1][1]*right_cam_info['intrinsics'][1][1])/2)
-                                print(f"Epipolar error {extrinsics[0]*np.sqrt(scale)}")
-                                left_cam_info['extrinsics']['epipolar_error'] = extrinsics[0]*np.sqrt(scale)
-                                left_cam_info['extrinsics']['stereo_error'] = extrinsics[0]*np.sqrt(scale)
-                            else:
-                                print(f"Epipolar error {extrinsics[0]}")
-                                left_cam_info['extrinsics']['epipolar_error'] = extrinsics[0]
-                                left_cam_info['extrinsics']['stereo_error'] = extrinsics[0]
-                            """self.test_epipolar_charuco(left_cam_info['name'], 
-                                                        right_cam_info['name'],
-                                                        left_path, 
-                                                        right_path, 
-                                                        left_cam_info['intrinsics'], 
-                                                        left_cam_info['dist_coeff'], 
-                                                        right_cam_info['intrinsics'], 
-                                                        right_cam_info['dist_coeff'], 
-                                                        extrinsics[2], # Translation between left and right Cameras
-                                                        extrinsics[3], # Left Rectification rotation 
-                                                        extrinsics[4]) # Right Rectification rotation"""
-                                                                                            
-    
-                            left_cam_info['extrinsics']['rotation_matrix'] = extrinsics[1]
-                            left_cam_info['extrinsics']['translation'] = extrinsics[2]
-    
+        stereoPairs = []
+        for camera, _ in activeCameras:
+            left_cam_info = board_config['cameras'][camera]
+            if str(left_cam_info["name"]) in self.disableCamera:
+                continue
+            if not 'extrinsics' in left_cam_info:
+                continue
+            if not 'to_cam' in left_cam_info['extrinsics']:
+                continue
+            if str(board_config['cameras'][left_cam_info['extrinsics']['to_cam']]['name']) in self.disableCamera:
+                continue
+            stereoPairs.append([camera, left_cam_info['extrinsics']['to_cam']])
+
+        for cam, cam_info in activeCameras:
+            cam_info = load_camera_data(self, filepath, cam_info, self._cameraModel, self.ccm_model, self.model, charucos, resizeWidth, resizeHeight)
+
+        tasks = []
+        camInfos = []
+        if per_ccm:
+            for cam, cam_info in activeCameras:
+                ret = ParallelTask(get_features, [self, features, charucos[cam_info['name']], cam_info])
+                if self._cameraModel == "fisheye":
+                    ret2 = ParallelTask(filter_features_fisheye, [self, ret[0], intrinsic_img, ret[1], ret[2]])
+                else:
+                    featuresAndIds = ParallelTask(estimate_pose_and_filter, [self, *ret])
+                    
+                    ret2 = ParallelTask(calibrate_charuco, [self, ret[0], *featuresAndIds])
+                ret3 = ParallelTask(calibrate_ccm_intrinsics_per_ccm, [self, features, *ret2, *featuresAndIds])
+                tasks.extend([ret, ret2, ret3, featuresAndIds])
+                camInfos.append((cam, ret3))
+        else:
+            for cam, cam_info in activeCameras:
+                cam_info = calibrate_ccm_intrinsics(self, cam_info, charucos[cam_info['name']])
+
+        pw = ParallelWorker(16)
+        pw.execute(tasks)
+
+        for cam, cam_info in camInfos:
+            board_config['cameras'][cam] = cam_info.retvals
+            
+
+        for left, right in stereoPairs:
+            calibrate_stereo_pair(self, left, right, board_config, features)
+
         return 1, board_config
 
-    def getting_features(self, img_path, name, features = None):
-        if self.charucos != {}:
+    def load_camera_data(self, filepath, cam_info, _cameraModel, ccm_model, model, charucos, resizeWidth, resizeHeight):
+        images_path = filepath + '/' + cam_info['name']
+        image_files = glob.glob(images_path + "/*")
+        image_files.sort()
+        for im in image_files:
+            frame = cv2.imread(im)
+            height, width, _ = frame.shape
+            widthRatio = resizeWidth / width
+            heightRatio = resizeHeight / height
+            if (widthRatio > 0.8 and heightRatio > 0.8 and widthRatio <= 1.0 and heightRatio <= 1.0) or (widthRatio > 1.2 and heightRatio > 1.2) or (resizeHeight == 0):
+                resizeWidth = width
+                resizeHeight = height
+            break
+
+        images_path = filepath + '/' + cam_info['name']
+        if "calib_model" in cam_info:
+            cameraModel_ccm, model_ccm = cam_info["calib_model"].split("_")
+            if cameraModel_ccm == "fisheye":
+                model_ccm == None
+            calib_model = cameraModel_ccm
+            distortion_model = model_ccm
+        else:
+            calib_model = _cameraModel
+            if cam_info["name"] in ccm_model:
+                distortion_model = ccm_model[cam_info["name"]]
+            else:
+                distortion_model = model
+
+        img_path = glob.glob(images_path + "/*")
+        if charucos == {}:
+            img_path = sorted(img_path, key=lambda x: int(x.split('_')[1]))
+        else:
+            img_path.sort()
+
+        return width, height, img_path, calib_model, distortion_model, images_path
+
+    def calibrate_stereo_pair(self, left_cam, right_cam, board_config, features):
+        left_cam_info = board_config['cameras'][left_cam]
+        right_cam_info = board_config['cameras'][left_cam_info['extrinsics']['to_cam']]
+        print('<-------------Extrinsics calibration of {} and {} ------------>'.format(
+            left_cam_info['name'], right_cam_info['name']))
+
+        specTranslation = left_cam_info['extrinsics']['specTranslation']
+        rot = left_cam_info['extrinsics']['rotation']
+
+        translation = np.array(
+            [specTranslation['x'], specTranslation['y'], specTranslation['z']], dtype=np.float32)
+        rotation = Rotation.from_euler(
+            'xyz', [rot['r'], rot['p'], rot['y']], degrees=True).as_matrix().astype(np.float32)
+        if per_ccm and extrinsic_per_ccm:
+            if left_cam_info["name"] in self.extrinsic_img or right_cam_info["name"] in self.extrinsic_img:
+                if left_cam_info["name"] in self.extrinsic_img:
+                    array = self.extrinsic_img[left_cam_info["name"]]
+                elif right_cam_info["name"] in self.extrinsic_img:
+                    array = self.extrinsic_img[left_cam_info["name"]]
+                    
+                    
+                    
+                left_cam_info['filtered_corners'], left_cam_info['filtered_ids'], filtered_images = self.remove_features(left_cam_info['filtered_corners'], left_cam_info['filtered_ids'], array)
+                right_cam_info['filtered_corners'], right_cam_info['filtered_ids'], filtered_images = self.remove_features(right_cam_info['filtered_corners'], right_cam_info['filtered_ids'], array)
+                removed_features, left_cam_info['filtered_corners'], left_cam_info['filtered_ids'], _, _ = self.filtering_features(left_cam_info['filtered_corners'], left_cam_info['filtered_ids'], left_cam_info["name"],left_cam_info["imsize"],left_cam_info["hfov"], left_cam_info['intrinsics'], left_cam_info['dist_coeff'],  left_cam_info['distortion_model'])
+                removed_features, right_cam_info['filtered_corners'], right_cam_info['filtered_ids'], _, _ = self.filtering_features(right_cam_info['filtered_corners'], right_cam_info['filtered_ids'], right_cam_info["name"], right_cam_info["imsize"], right_cam_info["hfov"], left_cam_info['intrinsics'], left_cam_info['dist_coeff'], right_cam_info['distortion_model'])
+        
+        extrinsics = self.calibrate_stereo(left_cam_info['name'], right_cam_info['name'], left_cam_info['filtered_ids'], left_cam_info['filtered_corners'], right_cam_info['filtered_ids'], right_cam_info['filtered_corners'], left_cam_info['intrinsics'], left_cam_info['dist_coeff'], right_cam_info['intrinsics'], right_cam_info['dist_coeff'], translation, rotation, left_cam_info['calib_model'], right_cam_info['calib_model'], left_cam_info['distortion_model'], right_cam_info['distortion_model'], features)
+        if extrinsics[0] == -1:
+            return -1, extrinsics[1]
+
+        if board_config['stereo_config']['left_cam'] == left_cam and board_config['stereo_config']['right_cam'] == right_cam:
+            board_config['stereo_config']['rectification_left'] = extrinsics[3]
+            board_config['stereo_config']['rectification_right'] = extrinsics[4]
+
+        elif board_config['stereo_config']['left_cam'] == right_cam and board_config['stereo_config']['right_cam'] == left_cam:
+            board_config['stereo_config']['rectification_left'] = extrinsics[4]
+            board_config['stereo_config']['rectification_right'] = extrinsics[3]
+
+        """ for stereoObj in board_config['stereo_config']:
+
+            if stereoObj['left_cam'] == left_cam and stereoObj['right_cam'] == right_cam and stereoObj['main'] == 1:
+                stereoObj['rectification_left'] = extrinsics[3]
+                stereoObj['rectification_right'] = extrinsics[4] """
+
+        print('<-------------Epipolar error of {} and {} ------------>'.format(
+            left_cam_info['name'], right_cam_info['name']))
+        #print(f"dist {left_cam_info['name']}: {left_cam_info['dist_coeff']}")
+        #print(f"dist {right_cam_info['name']}: {right_cam_info['dist_coeff']}")
+        if left_cam_info['intrinsics'][0][0] < right_cam_info['intrinsics'][0][0]:
+            scale = right_cam_info['intrinsics'][0][0]
+        else:
+            scale = left_cam_info['intrinsics'][0][0]
+        if per_ccm and extrinsic_per_ccm:
+            scale = ((left_cam_info['intrinsics'][0][0]*right_cam_info['intrinsics'][0][0] + left_cam_info['intrinsics'][1][1]*right_cam_info['intrinsics'][1][1])/2)
+            print(f"Epipolar error {extrinsics[0]*np.sqrt(scale)}")
+            left_cam_info['extrinsics']['epipolar_error'] = extrinsics[0]*np.sqrt(scale)
+            left_cam_info['extrinsics']['stereo_error'] = extrinsics[0]*np.sqrt(scale)
+        else:
+            print(f"Epipolar error {extrinsics[0]}")
+            left_cam_info['extrinsics']['epipolar_error'] = extrinsics[0]
+            left_cam_info['extrinsics']['stereo_error'] = extrinsics[0]
+        """self.test_epipolar_charuco(left_cam_info['name'], 
+                                    right_cam_info['name'],
+                                    left_path, 
+                                    right_path, 
+                                    left_cam_info['intrinsics'], 
+                                    left_cam_info['dist_coeff'], 
+                                    right_cam_info['intrinsics'], 
+                                    right_cam_info['dist_coeff'], 
+                                    extrinsics[2], # Translation between left and right Cameras
+                                    extrinsics[3], # Left Rectification rotation 
+                                    extrinsics[4], # Right Rectification rotation
+                                    calibModels[left_cam_info['name']], calibModels[right_cam_info['name']]
+                                    )"""
+                                                                            
+
+        left_cam_info['extrinsics']['rotation_matrix'] = extrinsics[1]
+        left_cam_info['extrinsics']['translation'] = extrinsics[2]
+
+    def getting_features(self, img_path, width, height, features = None, charucos=None):
+        if charucos:
             allCorners = []
             allIds = []
-            for index, charuco_img in enumerate(self.charucos[name]):
-                ids, charucos = charuco_img
-                allCorners.append(charucos)
+            for index, charuco_img in enumerate(charucos):
+                ids, charuco = charuco_img
+                allCorners.append(charuco)
                 allIds.append(ids)
-            imsize = (self.width[name], self.height[name])
+            imsize = (width, height)
             return allCorners, allIds, imsize
 
         elif features == None or features == "charucos":
-            img_path = glob.glob(img_path + "/*")
-            img_path.sort()
             allCorners, allIds, _, _, imsize, _ = self.analyze_charuco(img_path)
             return allCorners, allIds, imsize
 
         if features == "checker_board":
-            img_path = glob.glob(img_path + "/*")
-            img_path.sort()
             allCorners, allIds, _, _, imsize, _ = self.analyze_charuco(img_path)
             return allCorners, allIds, imsize
         ###### ADD HERE WHAT IT IS NEEDED ######
 
-    def filtering_features(self,allCorners, allIds, name,imsize, hfov, cameraMatrixInit, distCoeffsInit):
-
+    def estimate_pose_and_filter(self, allCorners, allIds, name,imsize, hfov, K, d):
          # check if there are any suspicious corners with high reprojection error
-        rvecs = []
-        tvecs = []
         index = 0
-        self.index = 0
         max_threshold = 75 + self.initial_max_threshold * (hfov / 30 + imsize[1] / 800 * 0.2)
         threshold_stepper = int(1.5 * (hfov / 30 + imsize[1] / 800))
         if threshold_stepper < 1:
             threshold_stepper = 1
         print(threshold_stepper)
-        min_inlier = 1 - self.initial_min_filtered * (hfov / 60 + imsize[1] / 800 * 0.2)
+        min_inliers = 1 - self.initial_min_filtered * (hfov / 60 + imsize[1] / 800 * 0.2)
         overall_pose = time.time()
         for index, corners in enumerate(allCorners):
             if len(corners) < 4:
-                return f"Less than 4 corners detected on {index} image.", None, None
-        for corners, ids in zip(allCorners, allIds):
-            current = time.time()
-            self.index = index
-            objpts = self.charuco_ids_to_objpoints(ids)
-            rvec, tvec, newids = self.camera_pose_charuco(objpts, corners, ids, cameraMatrixInit, distCoeffsInit, max_threshold = max_threshold, min_inliers=min_inlier, ini_threshold = 5, threshold_stepper=threshold_stepper)
-            #allCorners[index] = np.array([corners[id[0]-1] for id in newids])
-            #allIds[index] = np.array([ids[id[0]-1] for id in newids])
-            tvecs.append(tvec)
-            rvecs.append(rvec)
-            print(f"Pose estimation {index}, {time.time() -current}s")
-            index += 1
+                raise RuntimeError(f"Less than 4 corners detected on {index} image.")
+        current = time.time()
+        
+        filtered_corners = []
+        filtered_ids = []
+        removed_corners = []
+            
+        
+        #for corners, ids in zip(allCorners, allIds):
+        current = time.time()
+        
+        with multiprocessing.Pool(processes=16) as pool:
+            results = pool.map(func=estimate_pose_and_filter_single, iterable=[(self, a, b, K, d, min_inliers, max_threshold, threshold_stepper) for a, b in zip(allCorners, allIds)])
+
+        filtered_ids, filtered_corners, removed_corners = zip(*results)
+
         print(f"Overall pose estimation {time.time() - overall_pose}s")
 
-        # Here we need to get initialK and parameters for each camera ready and fill them inside reconstructed reprojection error per point
-        ret = 0.0
-        distortion_flags = self.get_distortion_flags(name)
-        flags = cv2.CALIB_USE_INTRINSIC_GUESS + distortion_flags
-        current = time.time()
-        filtered_corners, filtered_ids,all_error, removed_corners, removed_ids, removed_error = self.features_filtering_function(rvecs, tvecs, cameraMatrixInit, distCoeffsInit, ret, allCorners, allIds, camera = name)
-        corner_detector = filtered_corners.copy()
-        for index, corners in enumerate(filtered_corners):
-            if len(corners) < 4:
-                corner_detector.remove(corners)
-        if len(corner_detector) < int(len(self.img_path)*0.75):
-            return f"More than 1/4 of images has less than 4 corners for {name}", None, None
-
-                
+        if sum([len(corners) < 4 for corners in filtered_corners]) > 0.15 * len(allCorners):
+            raise RuntimeError(f"More than 1/4 of images has less than 4 corners for {name}")
         print(f"Filtering {time.time() -current}s")
+        
+        return filtered_corners, filtered_ids, removed_corners
+
+    def filtering_features(self, allCorners, allIds, name,imsize, hfov, cameraMatrixInit, distCoeffsInit, distortionModel):
+
+         # check if there are any suspicious corners with high reprojection error
+        filtered_corners, filtered_ids, removed_corners = self.estimate_pose_and_filter(allCorners, allIds, name,imsize, hfov, cameraMatrixInit, distCoeffsInit)
+
+        distortion_flags = self.get_distortion_flags(distortionModel)
+        flags = cv2.CALIB_USE_INTRINSIC_GUESS + distortion_flags
+                
         try:
             (ret, camera_matrix, distortion_coefficients,
                      rotation_vectors, translation_vectors,
@@ -533,7 +566,7 @@ class StereoCalibration(object):
                      perViewErrors) = cv2.aruco.calibrateCameraCharucoExtended(
                         charucoCorners=filtered_corners,
                         charucoIds=filtered_ids,
-                        board=self.board,
+                        board=self._board,
                         imageSize=imsize,
                         cameraMatrix=cameraMatrixInit,
                         distCoeffs=distCoeffsInit,
@@ -542,9 +575,7 @@ class StereoCalibration(object):
         except:
             return f"First intrisic calibration failed for {name}", None, None
 
-        self.cameraIntrinsics[name] = camera_matrix
-        self.cameraDistortion[name] = distortion_coefficients
-        return removed_corners, filtered_corners, filtered_ids
+        return removed_corners, filtered_corners, filtered_ids, camera_matrix, distortion_coefficients
     
     def remove_features(self, allCorners, allIds, array, img_files = None):
         filteredCorners = allCorners.copy()
@@ -560,23 +591,23 @@ class StereoCalibration(object):
 
         return filteredCorners, filteredIds, img_path
 
-    def get_distortion_flags(self,name):
+    def get_distortion_flags(self, distortionModel):
         def is_binary_string(s: str) -> bool:
         # Check if all characters in the string are '0' or '1'
             return all(char in '01' for char in s)
-        if self.distortion_model[name] == None:
+        if distortionModel == None:
             print("Use DEFAULT model")
             flags = cv2.CALIB_RATIONAL_MODEL
-        elif is_binary_string(self.distortion_model[name]):
+        elif is_binary_string(distortionModel):
             flags = cv2.CALIB_RATIONAL_MODEL
             flags += cv2.CALIB_TILTED_MODEL
             flags += cv2.CALIB_THIN_PRISM_MODEL
-            binary_number = int(self.distortion_model[name], 2)
+            binary_number = int(distortionModel, 2)
             # Print the results
             if binary_number == 0:
                 clauses_status = [True, True,True, True, True, True, True, True, True]
             else:
-                clauses_status = [(binary_number & (1 << i)) != 0 for i in range(len(self.distortion_model[name]))]
+                clauses_status = [(binary_number & (1 << i)) != 0 for i in range(len(distortionModel))]
                 clauses_status = clauses_status[::-1]
             if clauses_status[0]:
                 print("FIX_K1")
@@ -606,61 +637,54 @@ class StereoCalibration(object):
                 print("FIX_PRISM_DISTORTION")
                 flags += cv2.CALIB_FIX_S1_S2_S3_S4
 
-        elif isinstance(self.distortion_model[name], str):
-            if self.distortion_model[name] == "NORMAL":
+        elif isinstance(distortionModel, str):
+            if distortionModel == "NORMAL":
                 print("Using NORMAL model")
                 flags = cv2.CALIB_RATIONAL_MODEL
                 flags += cv2.CALIB_TILTED_MODEL
 
-            elif self.distortion_model[name] == "TILTED":
+            elif distortionModel == "TILTED":
                 print("Using TILTED model")
                 flags = cv2.CALIB_RATIONAL_MODEL
                 flags += cv2.CALIB_TILTED_MODEL
 
-            elif self.distortion_model[name] == "PRISM":
+            elif distortionModel == "PRISM":
                 print("Using PRISM model")
                 flags = cv2.CALIB_RATIONAL_MODEL
                 flags += cv2.CALIB_TILTED_MODEL
                 flags += cv2.CALIB_THIN_PRISM_MODEL
 
-            elif self.distortion_model[name] == "THERMAL":
+            elif distortionModel == "THERMAL":
                 print("Using THERMAL model")
                 flags = cv2.CALIB_RATIONAL_MODEL
                 flags += cv2.CALIB_FIX_K3
                 flags += cv2.CALIB_FIX_K5
                 flags += cv2.CALIB_FIX_K6
 
-        elif isinstance(self.distortion_model[name], int):
+        elif isinstance(distortionModel, int):
             print("Using CUSTOM flags")
-            flags = self.distortion_model[name]
+            flags = distortionModel
         return flags
 
-    def calibrate_wf_intrinsics(self, name, all_Features, all_features_Ids, allCorners, allIds, imsize, hfov, features, image_files):
-        image_files = glob.glob(image_files + "/*")
-        image_files.sort()
+    def calibrate_wf_intrinsics(self, name, allCorners, allIds, imsize, hfov, features, calib_model, distortionModel, cameraIntrinsics, distCoeff):
         coverageImage = np.ones(imsize[::-1], np.uint8) * 255
         coverageImage = cv2.cvtColor(coverageImage, cv2.COLOR_GRAY2BGR)
         coverageImage = self.draw_corners(allCorners, coverageImage)
-        if self.calib_model[name] == 'perspective':
+        if calib_model == 'perspective':
             if features == None or features == "charucos":
-                distortion_flags = self.get_distortion_flags(name)
-                ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, filtered_ids, filtered_corners, allCorners, allIds  = self.calibrate_camera_charuco(
-                    all_Features, all_features_Ids,allCorners, allIds, imsize, hfov, name, distortion_flags)
-            if self.charucos == {}:
-                self.undistort_visualization(
-                    image_files, camera_matrix, distortion_coefficients, imsize, name)
+                distortion_flags = self.get_distortion_flags(distortionModel)
+                ret, cameraIntrinsics, distCoeff, rotation_vectors, translation_vectors, filtered_ids, filtered_corners, allCorners, allIds  = self.calibrate_camera_charuco(
+                    allCorners, allIds, imsize, hfov, name, distortion_flags, cameraIntrinsics, distCoeff)
 
-                return ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, filtered_ids, filtered_corners, imsize, coverageImage, allCorners, allIds
+                return ret, cameraIntrinsics, distCoeff, rotation_vectors, translation_vectors, filtered_ids, filtered_corners, imsize, coverageImage, allCorners, allIds
             else:
-                return ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, filtered_ids, filtered_corners, imsize, coverageImage, allCorners, allIds
+                return ret, cameraIntrinsics, distCoeff, rotation_vectors, translation_vectors, filtered_ids, filtered_corners, imsize, coverageImage, allCorners, allIds
             #### ADD ADDITIONAL FEATURES CALIBRATION ####
         else:
             if features == None or features == "charucos":
                 print('Fisheye--------------------------------------------------')
                 ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, filtered_ids, filtered_corners = self.calibrate_fisheye(
                     allCorners, allIds, imsize, hfov, name)
-                self.undistort_visualization(
-                        image_files, camera_matrix, distortion_coefficients, imsize, name)
                 print('Fisheye rotation vector', rotation_vectors[0])
                 print('Fisheye translation vector', translation_vectors[0])
 
@@ -698,11 +722,10 @@ class StereoCalibration(object):
         display_points = []
         circle_size = 0
         reported_error = []
-        for i, (corners, ids, frame_path) in enumerate(zip(filtered_corners, filtered_id, self.img_path)):
-            frame = cv2.imread(frame_path)
+        for i, (corners, ids) in enumerate(zip(filtered_corners, filtered_id)):
             if ids is not None and corners.size > 0:
                 ids = ids.flatten()  # Flatten the IDs from 2D to 1D
-                objPoints = np.array([self.board.chessboardCorners[id] for id in ids], dtype=np.float32)
+                objPoints = np.array([self._board.chessboardCorners[id] for id in ids], dtype=np.float32)
                 imgpoints2, _ = cv2.projectPoints(objPoints, rvecs[i], tvecs[i], cameraMatrix, distCoeffs)
                 corners2 = corners.reshape(-1, 2)
                 imgpoints2 = imgpoints2.reshape(-1, 2)
@@ -735,184 +758,20 @@ class StereoCalibration(object):
                 rms_error = np.sqrt(total_error_squared / total_points if total_points else 0)
                 whole_error.append(rms_error)
 
-                if self.traceLevel in {2, 4, 10}:
-                    print(f"Overall RMS re-projection error for frame {i}: {rms_error}")
 
             total_error_squared = 0
             total_points = 0
 
-            if self.traceLevel == 8 or self.traceLevel == 10:
-                centroid_x = np.mean(np.array(display_corners).T[0])
-                centroid_y = np.mean(np.array(display_corners).T[1])
-
-                # Calculate distances from the center
-                distances = [distance((centroid_x, centroid_y), point) for point in np.array(corners2)]
-                max_distance = max(distances)
-                if max_distance > circle_size:
-                    circle_size = max_distance
-                circle = plt.Circle((centroid_x, centroid_y), circle_size, color='black', fill=True, label = "Calibrated area", alpha = 0.2)
-                fig, ax = plt.subplots()
-                ax.add_artist(circle)
-                ax.set_title(f"Reprojection error for frame {i}, camera {camera}")
-                ax.scatter(np.array(corners2).T[0], np.array(corners2).T[1], label = "Original", alpha = 0.5, color = "Black")
-                img = ax.scatter(np.array(imgpoints2).T[0], np.array(imgpoints2).T[1], c=errors, cmap = GnRd, label = "Reprojected", vmin=0, vmax=threshold)
-                ax.imshow(frame, alpha = 0.5)
-                ax.plot([],[], label = f"Rerprojection Remade: {round(rms_error, 4)}", color = "white")
-                ax.plot([],[], label = f"Whole Rerprojection OpenCV: {round(reprojection, 4)}", color = "white")
-                cbar = plt.colorbar(img, ax=ax)
-                cbar.set_label("Reprojection error")
-                ax.set_xlabel('Width')
-                ax.set_xlim([0,self.width[camera]])
-                ax.set_ylim([0,self.height[camera]])
-                ax.legend()
-                ax.set_ylabel('Y coordinate')
-                plt.grid()
-                plt.show()
-
-            if self.traceLevel == 9 or self.traceLevel == 10:
-                centroid_x = np.mean(np.array(removed_corners).T[0])
-                centroid_y = np.mean(np.array(removed_corners).T[1])
-
-                # Calculate distances from the center
-                distances = [distance((centroid_x, centroid_y), point) for point in np.array(corners2[removed_mask])]
-                max_distance = max(distances)
-                if max_distance > circle_size:
-                    circle_size = max_distance
-                circle = plt.Circle((centroid_x, centroid_y), circle_size, color='black', fill=True, label = "Calibrated area", alpha = 0.2)
-                fig, ax = plt.subplots()
-                ax.add_artist(circle)
-                ax.set_title(f"Removed error for frame {i}, camera {camera}")
-                ax.scatter(np.array(corners2[removed_mask]).T[0], np.array(corners2[removed_mask]).T[1], label = "Original", alpha = 0.5, color = "Black")
-                img = ax.scatter(np.array(imgpoints2[removed_mask]).T[0], np.array(imgpoints2[removed_mask]).T[1], c=errors[removed_mask], cmap = GnRd, label = "Reprojected", vmin=0, vmax=max(errors[removed_mask]))
-                ax.imshow(frame, alpha = 0.5)
-                ax.plot([],[], label = f"Rerprojection Remade: {round(np.mean(errors[removed_mask]), 4)}", color = "white")
-                ax.plot([],[], label = f"Whole Rerprojection OpenCV: {round(reprojection, 4)}", color = "white")
-                cbar = plt.colorbar(img, ax=ax)
-                cbar.set_label("Reprojection error")
-                ax.set_xlabel('Width')
-                ax.set_xlim([0,self.width[camera]])
-                ax.set_ylim([0,self.height[camera]])
-                ax.legend()
-                ax.set_ylabel('Y coordinate')
-                plt.grid()
-                plt.show()
-
-        if self.traceLevel == 3 or self.traceLevel == 5 or self.traceLevel == 10:
-            center_x, center_y = self.width[camera] / 2, self.height[camera] / 2
-            distances = [distance((center_x, center_y), point) for point in np.array(display_corners)]
-            max_distance = max(distances)
-            circle = plt.Circle((center_x, center_y), max_distance, color='black', fill=True, label = "Calibrated area", alpha = 0.2)
-            fig, ax = plt.subplots()
-            ax.add_artist(circle)
-            ax.set_title(f"Reprojection map camera {camera}")
-            ax.scatter(np.array(display_points).T[0], np.array(display_points).T[1], label = "Original", alpha = 0.5, color = "Black")
-            img = ax.scatter(np.array(display_corners).T[0], np.array(display_corners).T[1], c=all_error, cmap = GnRd, label = "Reprojected", vmin=0, vmax=threshold)
-            ax.imshow(frame, alpha = 0.5)
-            ax.plot([],[], label = f"Rerprojection Remade ALL: {round(np.sqrt(np.mean(np.array(whole_error)**2)), 4)}", color = "white")
-            ax.plot([],[], label = f"Whole Rerprojection OpenCV: {round(reprojection, 4)}", color = "white")
-            cbar = plt.colorbar(img, ax=ax)
-            cbar.set_label("Reprojection error")
-            ax.set_xlabel('Width')
-            ax.set_xlim([0,self.width[camera]])
-            ax.set_ylim([0,self.height[camera]])
-            ax.legend()
-            ax.set_ylabel('Height')
-            plt.grid()
-            plt.show()
-
-        if self.traceLevel == 3 or self.traceLevel == 5 or self.traceLevel == 10:
-            x = np.array(display_points).T[0]
-            y = np.array(display_points).T[1]
-            z = np.array(all_error)
-
-            x_flat = x.flatten()
-            y_flat = y.flatten()
-            z_flat = z.flatten()
-
-            fig, ax = plt.subplots()
-
-            self.errors[camera] = z_flat
-            _, bins, _ = ax.hist(all_error, range= [0,30], bins = 100, label = f"{camera}", color= "Blue", edgecolor= "black")
-            ax.hist(removed_error, bins = bins, color= "Blue", edgecolor= "black")
-            ax.plot([],[], label = f"MAX : {max(reported_error)}")
-            ax.plot([],[], label = f"MIN : {min(reported_error)}")
-            ax.legend()
-            ax.set_title("Reprojection error for shorter dataset")
-            ax.set_xlabel("Reprojection error")
-            plt.show()
-            grid_x, grid_y = np.mgrid[min(x_flat):max(x_flat):100j, min(y_flat):max(y_flat):100j]
-            grid_z = abs(griddata((x_flat, y_flat), z_flat, (grid_x, grid_y), method='cubic'))
-
-            plt.title(f"Reprojection error of {camera}")
-            plt.contourf(grid_x, grid_y, grid_z, 50, cmap=GnRd)
-            plt.colorbar(label='Reprojection error')
-            contours = plt.contour(grid_x, grid_y, grid_z, 7, colors ="black", alpha = 0.7, linewidths = 0.5, linestyles = "dashed")
-            plt.clabel(contours, inline=True, fontsize=8)
-            plt.xlim([0,self.width[camera]])
-            plt.ylim([0,self.height[camera]])
-            plt.grid()
-            plt.show()
-
-        if self.traceLevel == 11:
-            sorted_points, quadrant_coords = sort_points_into_quadrants(display_points, self.width[camera], self.height[camera], error=all_error)
-            quadrant_width = self.width // nx
-            quadrant_height = self.height // ny
-
-            image = np.full((self.height, self.width, 3), 255, dtype=np.uint8)
-
-            # Define the quadrant lines
-            quadrant_width = self.width // nx
-            quadrant_height = self.height // ny
-            index = 0
-            import math
-            for i in range(nx):
-                for j in range(ny):
-                    # Scale the color from red (0, 0, 255) to green (0, 255, 0)
-                    count = np.mean(sorted_points[index])
-                    if math.isnan(count):
-                        count = "Missing"
-                        red = 255
-                        green = 0
-                    if len(sorted_points[index]) < ((self.squaresX*self.squaresY))*0.05:
-                        count = f"Only {len(sorted_points[index])} points"
-                        red = 255
-                        green = 0 
-                    else:
-                        count = round(count, 4)
-                        red = int(((count / threshold)) * 255)
-                        green = int((1 -count / threshold) * 255)
-                    color = (0, green, red)
-
-                    left = j * quadrant_width
-                    upper = i * quadrant_height
-                    right = left + quadrant_width
-                    bottom = upper + quadrant_height
-                    index += 1
-
-                    cv2.rectangle(image, (left, upper), (right, bottom), color, -1)
-
-                    text_position = (left + 10, upper + quadrant_height // 2)
-                    cv2.putText(image, str(count), text_position, cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA)
-
-            cv2.imshow('Quadrants with Points', image)
-            cv2.waitKey(1)
-            cv2.destroyAllWindows()
-        if camera not in self.all_features.keys():
-            self.all_features[camera] = display_corners
-        self.all_features[camera] = display_corners
-        if camera not in self.all_errors.keys():
-            self.all_errors[camera] = all_error
-        self.all_errors[camera] = reported_error
         return all_corners ,all_ids, all_error, removed_corners, removed_ids, removed_error
 
     def detect_charuco_board(self, image: np.array):
         arucoParams = cv2.aruco.DetectorParameters_create()
         arucoParams.minMarkerDistanceRate = 0.01
-        corners, ids, rejectedImgPoints = cv2.aruco.detectMarkers(image, self.aruco_dictionary, parameters=arucoParams)  # First, detect markers
-        marker_corners, marker_ids, refusd, recoverd = cv2.aruco.refineDetectedMarkers(image, self.board, corners, ids, rejectedCorners=rejectedImgPoints)
+        corners, ids, rejectedImgPoints = cv2.aruco.detectMarkers(image, self._aruco_dictionary, parameters=arucoParams)  # First, detect markers
+        marker_corners, marker_ids, refusd, recoverd = cv2.aruco.refineDetectedMarkers(image, self._board, corners, ids, rejectedCorners=rejectedImgPoints)
         # If found, add object points, image points (after refining them)
         if len(marker_corners) > 0:
-            ret, corners, ids = cv2.aruco.interpolateCornersCharuco(marker_corners,marker_ids,image, self.board, minMarkers = 1)
+            ret, corners, ids = cv2.aruco.interpolateCornersCharuco(marker_corners,marker_ids,image, self._board, minMarkers = 1)
             return ret, corners, ids, marker_corners, marker_ids
         else:
             return None, None, None, None, None
@@ -934,18 +793,10 @@ class StereoCalibration(object):
             imgpoints2 = np.array([imgpoints2[id[0]] for id in objects])
 
             ret, rvec, tvec = cv2.solvePnP(imgpoints2, all_corners, K, d)
-            imgpoints2, _ = cv2.projectPoints(imgpoints2, rvec, tvec, self.cameraIntrinsics[self.name], self.cameraDistortion[self.name])
+            imgpoints2, _ = cv2.projectPoints(imgpoints2, rvec, tvec, K, d)
             
             ini_threshold += threshold_stepper
             index += 1
-        if self.traceLevel == 13:
-            image = cv2.imread(self.img_path[self.index])
-            plt.title(f"Number of rejected corners in filtering, iterations needed: {ini_threshold}, inliers: {round(len(objects)/len(corners[:,0,0]), 4) *100} %")
-            plt.imshow(image)
-            plt.scatter(corners[:,0,0],corners[:,0,1], marker= "o", label = f"Detected all corners: {len(corners[:,0,0])}", color = "Red")
-            plt.scatter(imgpoints2[:,0,0],imgpoints2[:,0,1], label = f"Filtering method: {len(objects)}", marker = "x", color = "Green")
-            plt.legend()
-            plt.show()
         if ret:
             return rvec, tvec, objects
         else:
@@ -960,7 +811,7 @@ class StereoCalibration(object):
         return errs 
     
     def charuco_ids_to_objpoints(self, ids):
-        one_pts = self.board.chessboardCorners
+        one_pts = self._board.chessboardCorners
         objpts = []
         for j in range(len(ids)):   
             objpts.append(one_pts[ids[j]])
@@ -984,8 +835,6 @@ class StereoCalibration(object):
         count = 0
         skip_vis = False
         for im in images:
-            if self.traceLevel == 3 or self.traceLevel == 10:
-                print("=> Processing image {0}".format(im))
             img_pth = Path(im)
             frame = cv2.imread(im)
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -1017,9 +866,6 @@ class StereoCalibration(object):
             
             ret, charuco_corners, charuco_ids, marker_corners, marker_ids  = self.detect_charuco_board(gray)
 
-            if self.traceLevel == 2 or self.traceLevel == 4 or self.traceLevel == 10:
-                print('{0} number of Markers corners detected in the image {1}'.format(
-                    len(charuco_corners), img_pth.name))
 
             if charuco_corners is not None and charuco_ids is not None and len(charuco_corners) > 3:
 
@@ -1035,44 +881,30 @@ class StereoCalibration(object):
                 print(im)
                 return f'Failed to detect more than 3 markers on image {im}', None, None, None, None, None
 
-            if self.traceLevel == 2 or self.traceLevel == 4 or self.traceLevel == 10:
-                rgb_img = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-                cv2.aruco.drawDetectedMarkers(rgb_img, marker_corners, marker_ids, (0, 0, 255))
-                cv2.aruco.drawDetectedCornersCharuco(rgb_img, charuco_corners, charuco_ids, (0, 255, 0))
-
-                if rgb_img.shape[1] > 1920:
-                    rgb_img = cv2.resize(rgb_img, (0, 0), fx=0.7, fy=0.7)
-                if not skip_vis:
-                    name = img_pth.name + ' - ' + "marker frame"
-                    cv2.imshow(name, rgb_img)
-                    k = cv2.waitKey(1)
-                    if k == 27: # Esc key to skip vis
-                        skip_vis = True
-                cv2.destroyAllWindows()
         # imsize = gray.shape[::-1]
         return allCorners, allIds, all_marker_corners, all_marker_ids, gray.shape[::-1], all_recovered
 
-    def calibrate_intrinsics(self, image_files, hfov, name):
+    def calibrate_intrinsics(self, image_files, hfov, name, charucos, width, height, calib_model, distortionModel):
         image_files = glob.glob(image_files + "/*")
         image_files.sort()
         assert len(
             image_files) != 0, "ERROR: Images not read correctly, check directory"
-        if self.charucos == {}:
+        if charucos == {}:
             allCorners, allIds, _, _, imsize, _ = self.analyze_charuco(image_files)
         else:
             allCorners = []
             allIds = []
-            for index, charuco_img in enumerate(self.charucos[name]):
+            for index, charuco_img in enumerate(charucos[name]):
                 ids, charucos = charuco_img
                 allCorners.append(charucos)
                 allIds.append(ids)
-            imsize = (self.height[name], self.width[name])
+            imsize = (height, width)
 
         coverageImage = np.ones(imsize[::-1], np.uint8) * 255
         coverageImage = cv2.cvtColor(coverageImage, cv2.COLOR_GRAY2BGR)
         coverageImage = self.draw_corners(allCorners, coverageImage)
-        if self.calib_model[name] == 'perspective':
-            distortion_flags = self.get_distortion_flags(name)
+        if calib_model == 'perspective':
+            distortion_flags = self.get_distortion_flags(distortionModel) # TODO : The call to calibrate_camera_charuco has different parameters than it should
             ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, filtered_ids, filtered_corners, allCorners, allIds  = self.calibrate_camera_charuco(
                 allCorners, allIds, imsize, hfov, name, distortion_flags)
             self.undistort_visualization(
@@ -1104,11 +936,6 @@ class StereoCalibration(object):
                                     * scale - destShape[0]) / 2
         scaled_intrinsics[0][2] -= (originalShape[1]     # c_x width of the image
                                     * scale - destShape[1]) / 2
-        if self.traceLevel == 3 or self.traceLevel == 10:
-            print('original_intrinsics')
-            print(intrinsics)
-            print('scaled_intrinsics')
-            print(scaled_intrinsics)
 
         return scaled_intrinsics
 
@@ -1117,7 +944,7 @@ class StereoCalibration(object):
             # print(im)
             img = cv2.imread(im)
             # h, w = img.shape[:2]
-            if self.cameraModel == 'perspective':
+            if self._cameraModel == 'perspective':
                 kScaled, _ = cv2.getOptimalNewCameraMatrix(K, D, img_size, 0)
                 # print(f'K scaled is \n {kScaled} and size is \n {img_size}')
                 # print(f'D Value is \n {D}')
@@ -1133,20 +960,6 @@ class StereoCalibration(object):
             if index == 0:
                 undistorted_file_path = self.data_path + '/' + name + f'_undistorted.png'
                 cv2.imwrite(undistorted_file_path, undistorted_img)
-            if self.traceLevel == 4 or self.traceLevel == 5 or self.traceLevel == 10:
-                cv2.putText(undistorted_img, "Press S to save image", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 2*undistorted_img.shape[0]/1750, (0, 0, 255), 2)
-                cv2.imshow("undistorted", undistorted_img)
-                k = cv2.waitKey(1)
-                if k == ord("s") or k == ord("S"):
-                    undistorted_img = cv2.remap(
-                        img, map1, map2, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
-                    undistorted_file_path = self.data_path + '/' + name + f'_{index}_undistorted.png'
-                    cv2.imwrite(undistorted_file_path, undistorted_img)
-                if k == 27:  # Esc key to stop
-                    break
-                print(f'image path - {im}')
-                print(f'Image Undistorted Size {undistorted_img.shape}')
-                cv2.destroyWindow("undistorted")
 
 
     def filter_corner_outliers(self, allIds, allCorners, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors):
@@ -1155,7 +968,7 @@ class StereoCalibration(object):
             corners = allCorners[i]
             ids = allIds[i]
             objpts = self.charuco_ids_to_objpoints(ids)
-            if self.cameraModel == "fisheye":
+            if self._cameraModel == "fisheye":
                 errs = self.compute_reprojection_errors(objpts, corners, camera_matrix, distortion_coefficients, rotation_vectors[i], translation_vectors[i], fisheye = True)
             else:
                 errs = self.compute_reprojection_errors(objpts, corners, camera_matrix, distortion_coefficients, rotation_vectors[i], translation_vectors[i])
@@ -1173,40 +986,22 @@ class StereoCalibration(object):
         return corners_removed, allIds, allCorners
 
 
-    def calibrate_camera_charuco(self, all_Features, all_features_Ids, allCorners, allIds, imsize, hfov, name, distortion_flags):
+    def calibrate_camera_charuco(self, allCorners, allIds, imsize, hfov, name, distortion_flags, cameraIntrinsics, distCoeff):
         """
         Calibrates the camera using the dected corners.
         """
         f = imsize[0] / (2 * np.tan(np.deg2rad(hfov/2)))
 
-        if name not in self.cameraIntrinsics:
-            cameraMatrixInit = np.array([[f,    0.0,      imsize[0]/2],
-                                     [0.0,     f,      imsize[1]/2],
-                                     [0.0,   0.0,        1.0]])
-            threshold = 20 * imsize[1]/800.0
-        else:
-            cameraMatrixInit = self.cameraIntrinsics[name]
-            threshold = 2 * imsize[1]/800.0
-       
-        if self.traceLevel == 3 or self.traceLevel == 10:
-            print(
-                f'Camera Matrix initialization with HFOV of {hfov} is.............')
-            print(cameraMatrixInit)
-        if name not in self.cameraDistortion:
-            distCoeffsInit = np.zeros((5, 1))
-        else:
-            distCoeffsInit = self.cameraDistortion[name]
+        threshold = 2 * imsize[1]/800.0
          # check if there are any suspicious corners with high reprojection error
         rvecs = []
         tvecs = []
-        self.index = 0
         index = 0
         max_threshold = 10 + self.initial_max_threshold * (hfov / 30 + imsize[1] / 800 * 0.2)
         min_inlier = 1 - self.initial_min_filtered * (hfov / 60 + imsize[1] / 800 * 0.2)
         for corners, ids in zip(allCorners, allIds):
-            self.index = index
             objpts = self.charuco_ids_to_objpoints(ids)
-            rvec, tvec, newids = self.camera_pose_charuco(objpts, corners, ids, cameraMatrixInit, distCoeffsInit)
+            rvec, tvec, newids = self.camera_pose_charuco(objpts, corners, ids, cameraIntrinsics, distCoeff)
             tvecs.append(tvec)
             rvecs.append(rvec)
             index += 1
@@ -1225,10 +1020,8 @@ class StereoCalibration(object):
         intrinsic_array = {"f_x": [], "f_y": [], "c_x": [],"c_y": []}
         distortion_array = {}
         index = 0
-        if self.traceLevel != 0:
-            fig, ax = plt.subplots()
-        camera_matrix = cameraMatrixInit
-        distortion_coefficients = distCoeffsInit
+        camera_matrix = cameraIntrinsics
+        distortion_coefficients = distCoeff
         rotation_vectors = rvecs
         translation_vectors = tvecs
         translation_array_x = []
@@ -1257,14 +1050,10 @@ class StereoCalibration(object):
                 iterations_array.append(index)
                 reprojection.append(ret)
                 for i in range(len(distortion_coefficients)):
-                    if i not in distortion_array.keys():
+                    if i not in distortion_array:
                         distortion_array[i] = []
                     distortion_array[i].append(distortion_coefficients[i][0])
                 print(f"Each filtering {time.time() - start}")
-                if self.traceLevel == 12:
-                    _, bins, _ = ax.hist(all_error, range = [0,30], bins = 100, label = f"Iteration {index}, number filtered: {len(removed_corners)}", color= plt.cm.summer(1-(index-1)/10), alpha = 0.3, edgecolor ="black")  
-                    ax.hist(removed_error, bins = bins, color= plt.cm.summer(1-(index-1)/7), alpha = 0.8, edgecolor = "black")
-                    ax.vlines(threshold, ymin = -0.5, ymax = len(all_error), color = "red")
                 start = time.time()
                 try:
                     (ret, camera_matrix, distortion_coefficients,
@@ -1273,95 +1062,29 @@ class StereoCalibration(object):
                      perViewErrors) = cv2.aruco.calibrateCameraCharucoExtended(
                         charucoCorners=filtered_corners,
                         charucoIds=filtered_ids,
-                        board=self.board,
+                        board=self._board,
                         imageSize=imsize,
-                        cameraMatrix=cameraMatrixInit,
-                        distCoeffs=distCoeffsInit,
+                        cameraMatrix=cameraIntrinsics,
+                        distCoeffs=distCoeff,
                         flags=flags,
                         criteria=(cv2.TERM_CRITERIA_EPS & cv2.TERM_CRITERIA_COUNT, 50000, 1e-9))
                 except:
                     raise StereoExceptions(message="Intrisic calibration failed", stage="intrinsic_calibration", element=name, id=self.id)
-                cameraMatrixInit = camera_matrix
-                distCoeffsInit = distortion_coefficients
+                cameraIntrinsics = camera_matrix
+                distCoeff = distortion_coefficients
                 threshold = 5 * imsize[1]/800.0
                 print(f"Each calibration {time.time()-start}")
                 index += 1
                 if  index > 5 or (previous_ids == removed_ids and len(previous_ids) >= len(removed_ids) and index > 2):
                     print(f"Whole procedure: {time.time() - whole}")
-                    if self.traceLevel == 12:
-                        fig.suptitle(f"Histograms of reprojection error for threshold {threshold}")
-                        ax.legend()
-                        ax.grid()
-                        plt.show()
-                        plt.title(f"Reprojection error after {int(index) + 1} iterations, threshold {threshold}")
-                        plt.plot(iterations_array, reprojection)
-                        plt.xlabel("Iteration")
-                        plt.ylabel("Reprojection error")
-                        plt.grid()
-                        plt.show()
-                        plt.title(f"Corners rejected after {int(index) + 1} iterations, threshold {threshold}")
-                        plt.plot(iterations_array, num_corners)
-                        plt.xlabel("Iteration")
-                        plt.ylabel("Rejected corners")
-                        plt.grid()
-                        plt.show()
-                        plt.title(f"Distortion after {int(index) + 1} iterations, threshold {threshold}")
-                        for key, distortion in distortion_array.items():
-                            if distortion[0] != 0:
-                                plt.plot(iterations_array,distortion, label = f"Distortion: {key}")
-                        plt.ylabel("Absolute change")
-                        plt.grid()
-                        plt.legend()
-                        plt.show()
-                        plt.subplot(2,2,1)
-                        plt.title(f"Intrinsic and extrinsics after {int(index) + 1} iterations, threshold {threshold}")
-                        plt.plot(iterations_array, intrinsic_array['f_x'],  label = "f_x")
-                        plt.plot([],[], color = "white", label = f"Start: {round(intrinsic_array['f_x'][0], 2)}")
-                        plt.plot([],[], color = "white", label = f"Finish: {round(intrinsic_array['f_x'][len(intrinsic_array['f_x'])-1], 2)}")
-                        plt.plot(iterations_array, intrinsic_array['f_y'], label = "f_y")
-                        plt.plot([],[], color = "white", label = f"Start: {round(intrinsic_array['f_y'][0], 2)}")
-                        plt.plot([],[], color = "white", label = f"Finish: {round(intrinsic_array['f_y'][len(intrinsic_array['f_y'])-1], 2)}")
-                        plt.xlabel("Iterations")
-                        plt.ylabel("Absolute change")
-                        plt.grid()
-                        plt.legend()
-
-                        plt.subplot(2,2,2)
-                        plt.plot(iterations_array, intrinsic_array['c_x'], label = "c_x")
-                        plt.plot([],[], color = "white", label = f"Start: {round(intrinsic_array['c_x'][0], 2)}")
-                        plt.plot([],[], color = "white", label = f"Finish: {round(intrinsic_array['c_x'][len(intrinsic_array['c_x'])-1], 2)}")
-                        plt.plot(iterations_array, intrinsic_array['c_y'], label = "c_y")
-                        plt.plot([],[], color = "white", label = f"Start: {round(intrinsic_array['c_y'][0], 2)}")
-                        plt.plot([],[], color = "white", label = f"Finish: {round(intrinsic_array['c_y'][len(intrinsic_array['c_y'])-1], 2)}")
-                        plt.xlabel("Iterations")
-                        plt.ylabel("Absolute change")
-                        plt.grid()
-                        plt.legend()
-
-                        plt.subplot(2,1,2)
-                        plt.plot(iterations_array, translation_array_x - translation_array_x[0], label = "Translation x")
-                        plt.plot(iterations_array, translation_array_y - translation_array_y[0], label = "Translation y")
-                        plt.plot(iterations_array, translation_array_z - translation_array_z[0], label = "Translation z")
-                        plt.grid()
-                        plt.xlabel("Iterations")
-                        plt.ylabel("Absolute change")
-                        plt.legend()
-                        plt.show()
-                        traceLevel_copy = self.traceLevel
-                        self.traceLevel = 8
-                        filtered_corners, filtered_ids , all_error,removed_corners, removed_ids, removed_error= self.features_filtering_function(rotation_vectors, translation_vectors, camera_matrix, distortion_coefficients, ret, allCorners, allIds, camera = name, threshold = 1.0)
-                        self.traceLevel = traceLevel_copy
                     break
                 previous_ids = removed_ids
         except:
             return f"Failed to calibrate camera {name}", None, None, None, None, None, None, None ,None , None
-        if self.traceLevel == 3 or self.traceLevel == 10:
-            print('Per View Errors...')
-            print(perViewErrors)
         return ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, filtered_ids, filtered_corners, allCorners, allIds
 
     def calibrate_fisheye(self, allCorners, allIds, imsize, hfov, name):
-        one_pts = self.board.chessboardCorners
+        one_pts = self._board.chessboardCorners
         obj_points = []
         for i in range(len(allIds)):
             obj_points.append(self.charuco_ids_to_objpoints(allIds[i]))
@@ -1442,18 +1165,12 @@ class StereoCalibration(object):
         return res, K, d, rvecs, tvecs, filtered_ids, filtered_corners
 
 
-    def calibrate_stereo(self, left_name, right_name, allIds_l, allCorners_l, allIds_r, allCorners_r, cameraMatrix_l, distCoeff_l, cameraMatrix_r, distCoeff_r, t_in, r_in, features = None):
+    def calibrate_stereo(self, left_name, right_name, allIds_l, allCorners_l, allIds_r, allCorners_r, cameraMatrix_l, distCoeff_l, cameraMatrix_r, distCoeff_r, t_in, r_in, left_calib_model, right_calib_model, left_distortion_model, right_distortion_model, features = None):
         left_corners_sampled = []
         right_corners_sampled = []
         left_ids_sampled = []
         obj_pts = []
-        one_pts = self.board.chessboardCorners
-
-        if self.traceLevel == 2 or self.traceLevel == 4 or self.traceLevel == 10:
-            print('Length of allIds_l')
-            print(len(allIds_l))
-            print('Length of allIds_r')
-            print(len(allIds_r))
+        one_pts = self._board.chessboardCorners
 
         for i in range(len(allIds_l)):
             left_sub_corners = []
@@ -1482,7 +1199,7 @@ class StereoCalibration(object):
                                 cv2.TERM_CRITERIA_EPS, 300, 1e-9)
         if per_ccm and extrinsic_per_ccm:
             for i in range(len(left_corners_sampled)):
-                if self.calib_model[left_name] == "perspective":
+                if left_calib_model == "perspective":
                     left_corners_sampled[i] = cv2.undistortPoints(np.array(left_corners_sampled[i]), cameraMatrix_l, distCoeff_l, P=cameraMatrix_l)
                     #left_corners_sampled[i] = cv2.undistortPoints(np.array(left_corners_sampled[i]), cameraMatrix_l, None)
 
@@ -1490,7 +1207,7 @@ class StereoCalibration(object):
                     left_corners_sampled[i] = cv2.fisheye.undistortPoints(np.array(left_corners_sampled[i]), cameraMatrix_l, distCoeff_l, P=cameraMatrix_l)
                     #left_corners_sampled[i] = cv2.fisheye.undistortPoints(np.array(left_corners_sampled[i]), cameraMatrix_l, None)
             for i in range(len(right_corners_sampled)):
-                if self.calib_model[right_name] == "perspective":
+                if right_calib_model == "perspective":
                     right_corners_sampled[i] = cv2.undistortPoints(np.array(right_corners_sampled[i]), cameraMatrix_r, distCoeff_r, P=cameraMatrix_r)
                     #right_corners_sampled[i] = cv2.undistortPoints(np.array(right_corners_sampled[i]), cameraMatrix_r, None)
                 else:
@@ -1521,29 +1238,21 @@ class StereoCalibration(object):
                 # self.P_l = P_l
                 # self.P_r = P_r
                 r_euler = Rotation.from_matrix(R_l).as_euler('xyz', degrees=True)
-                if self.traceLevel == 5 or self.traceLevel == 10:
-                    print(f'R_L Euler angles in XYZ {r_euler}')
                 r_euler = Rotation.from_matrix(R_r).as_euler('xyz', degrees=True)
-                if self.traceLevel == 5 or self.traceLevel == 10:
-                    print(f'R_R Euler angles in XYZ {r_euler}')
 
                 # print(f'P_l is \n {P_l}')
                 # print(f'P_r is \n {P_r}') 
                 return [ret, R, T, R_l, R_r, P_l, P_r]
             #### ADD OTHER CALIBRATION METHODS ###
         else:
-            if self.cameraModel == 'perspective':
+            if self._cameraModel == 'perspective':
                 flags = 0
                 # flags |= cv2.CALIB_USE_EXTRINSIC_GUESS
                 # print(flags)
                 flags = cv2.CALIB_FIX_INTRINSIC
-                distortion_flags = self.get_distortion_flags(left_name)
+                distortion_flags = self.get_distortion_flags(left_distortion_model)
                 flags += distortion_flags
                 # print(flags)
-                if self.traceLevel == 3 or self.traceLevel == 10:
-                    print('Printing Extrinsics guesses...')
-                    print(r_in)
-                    print(t_in)
                 ret, M1, d1, M2, d2, R, T, E, F, _ = cv2.stereoCalibrateExtended(
                 obj_pts, left_corners_sampled, right_corners_sampled,
                 cameraMatrix_l, distCoeff_l, cameraMatrix_r, distCoeff_r, None,
@@ -1566,14 +1275,10 @@ class StereoCalibration(object):
                 # self.P_l = P_l
                 # self.P_r = P_r
                 r_euler = Rotation.from_matrix(R_l).as_euler('xyz', degrees=True)
-                if self.traceLevel == 5 or self.traceLevel == 10:
-                    print(f'R_L Euler angles in XYZ {r_euler}')
                 r_euler = Rotation.from_matrix(R_r).as_euler('xyz', degrees=True)
-                if self.traceLevel == 5 or self.traceLevel == 10:
-                    print(f'R_R Euler angles in XYZ {r_euler}')
 
                 return [ret, R, T, R_l, R_r, P_l, P_r]
-            elif self.cameraModel == 'fisheye':
+            elif self._cameraModel == 'fisheye':
                 # make sure all images have the same *number of* points
                 min_num_points = min([len(pts) for pts in obj_pts])
                 obj_pts_truncated = [pts[:min_num_points] for pts in obj_pts]
@@ -1595,19 +1300,12 @@ class StereoCalibration(object):
                 # TODO(sACHIN): Try without intrinsic guess
                 # flags |= cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC
                 # flags = cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC + cv2.fisheye.CALIB_CHECK_COND + cv2.fisheye.CALIB_FIX_SKEW
-                if self.traceLevel == 3 or self.traceLevel == 10:
-                    print('Fisyeye stereo model..................') 
                 (ret, M1, d1, M2, d2, R, T), E, F = cv2.fisheye.stereoCalibrate(
                     obj_pts_truncated, left_corners_truncated, right_corners_truncated,
                     cameraMatrix_l, distCoeff_l, cameraMatrix_r, distCoeff_r, None,
                     flags=flags, criteria=stereocalib_criteria), None, None
                 r_euler = Rotation.from_matrix(R).as_euler('xyz', degrees=True)
                 print(f'Reprojection error is {ret}')
-                if self.traceLevel == 3 or self.traceLevel == 10:
-                    print('Printing Extrinsics res...')
-                    print(R)
-                    print(T)
-                    print(f'Euler angles in XYZ {r_euler} degs')
                 isHorizontal = np.absolute(T[0]) > np.absolute(T[1])
 
                 R_l, R_r, P_l, P_r, Q = cv2.fisheye.stereoRectify(
@@ -1618,11 +1316,7 @@ class StereoCalibration(object):
                     None, R, T, flags=0)
 
                 r_euler = Rotation.from_matrix(R_l).as_euler('xyz', degrees=True)
-                if self.traceLevel == 3 or self.traceLevel == 10:
-                    print(f'R_L Euler angles in XYZ {r_euler}')
                 r_euler = Rotation.from_matrix(R_r).as_euler('xyz', degrees=True)
-                if self.traceLevel == 3 or self.traceLevel == 10:
-                    print(f'R_R Euler angles in XYZ {r_euler}')            
 
                 return [ret, R, T, R_l, R_r, P_l, P_r]
 
@@ -1661,8 +1355,6 @@ class StereoCalibration(object):
 
     def scale_image(self, img, scaled_res):
         expected_height = img.shape[0]*(scaled_res[1]/img.shape[1])
-        if self.traceLevel == 2 or self.traceLevel == 10:
-            print("Expected Height: {}".format(expected_height))
 
         if not (img.shape[0] == scaled_res[0] and img.shape[1] == scaled_res[1]):
             if int(expected_height) == scaled_res[0]:
@@ -1691,7 +1383,7 @@ class StereoCalibration(object):
             return img
     
     def sgdEpipolar(self, images_left, images_right, M_lp, d_l, M_rp, d_r, r_l, r_r, kScaledL, kScaledR, scaled_res, isHorizontal):
-        if self.cameraModel == 'perspective':
+        if self._cameraModel == 'perspective':
             mapx_l, mapy_l = cv2.initUndistortRectifyMap(
                 M_lp, d_l, r_l, kScaledL, scaled_res[::-1], cv2.CV_32FC1)
             mapx_r, mapy_r = cv2.initUndistortRectifyMap(
@@ -1794,7 +1486,7 @@ class StereoCalibration(object):
         return avg_epipolar
 
 
-    def test_epipolar_charuco(self, left_name, right_name, left_img_pth, right_img_pth, M_l, d_l, M_r, d_r, t, r_l, r_r):
+    def test_epipolar_charuco(self, left_name, right_name, left_img_pth, right_img_pth, M_l, d_l, M_r, d_r, t, r_l, r_r, left_calib_model, right_calib_model):
         images_left = glob.glob(left_img_pth + '/*.png')
         images_right = glob.glob(right_img_pth + '/*.png')
         images_left.sort()
@@ -1824,11 +1516,6 @@ class StereoCalibration(object):
             diff = scaled_height - scaled_res[0]
             if diff < 0:
                 scaled_res = (int(scaled_height), scaled_res[1])
-        if self.traceLevel == 3 or self.traceLevel == 10:
-            print(
-                f'Is scale Req: {scale_req}\n scale value: {scale} \n scalable Res: {scalable_res} \n scale Res: {scaled_res}')
-            print("Original res Left :{}".format(frame_left_shape))
-            print("Original res Right :{}".format(frame_right_shape))
         # print("Scale res :{}".format(scaled_res))
 
         M_lp = self.scale_intrinsics(M_l, frame_left_shape, scaled_res)
@@ -1842,8 +1529,6 @@ class StereoCalibration(object):
         print('Original intrinsics ....')
         print(f"L {M_lp}")
         print(f"R: {M_rp}")
-        if self.traceLevel == 3 or self.traceLevel == 10:
-            print(f'Width and height is {scaled_res[::-1]}')
         # kScaledL, _ = cv2.getOptimalNewCameraMatrix(M_r, d_r, scaled_res[::-1], 0)
         # kScaledL, _ = cv2.getOptimalNewCameraMatrix(M_r, d_l, scaled_res[::-1], 0)
         # kScaledR, _ = cv2.getOptimalNewCameraMatrix(M_r, d_r, scaled_res[::-1], 0)
@@ -1862,14 +1547,14 @@ class StereoCalibration(object):
         movePos = True
 
 
-        print(self.calib_model[left_name], self.calib_model[right_name])
-        if self.calib_model[left_name] == 'perspective':
+        print(left_calib_model, right_calib_model)
+        if left_calib_model == 'perspective':
             mapx_l, mapy_l = cv2.initUndistortRectifyMap(
                 M_lp, d_l, r_l, kScaledL, scaled_res[::-1], cv2.CV_32FC1)
         else:
             mapx_l, mapy_l = cv2.fisheye.initUndistortRectifyMap(
                 M_lp, d_l, r_l, kScaledL, scaled_res[::-1], cv2.CV_32FC1)
-        if self.calib_model[right_name] == "perspective":
+        if right_calib_model == "perspective":
             mapx_r, mapy_r = cv2.initUndistortRectifyMap(
                 M_rp, d_r, r_r, kScaledR, scaled_res[::-1], cv2.CV_32FC1)
         else:
@@ -1903,17 +1588,6 @@ class StereoCalibration(object):
 
             image_data_pairs.append((img_l, img_r))
             
-            if self.traceLevel == 4 or self.traceLevel == 5 or self.traceLevel == 10:
-                #cv2.imshow("undistorted-Left", img_l)
-                #cv2.imshow("undistorted-right", img_r)
-                # print(f'image path - {im}')
-                # print(f'Image Undistorted Size {undistorted_img.shape}')
-                k = cv2.waitKey(0)
-                if k == 27:  # Esc key to stop
-                    break
-        if self.traceLevel == 4 or self.traceLevel == 5 or self.traceLevel == 10:
-          cv2.destroyWindow("undistorted-Left")
-          cv2.destroyWindow("undistorted-right")  
         # compute metrics
         imgpoints_r = []
         imgpoints_l = []
@@ -1922,9 +1596,6 @@ class StereoCalibration(object):
         for i, image_data_pair in enumerate(image_data_pairs):
             res2_l = self.detect_charuco_board(image_data_pair[0])
             res2_r = self.detect_charuco_board(image_data_pair[1])
-            
-            # if self.traceLevel == 2 or self.traceLevel == 4 or self.traceLevel == 10:
-            
 
             img_concat = cv2.hconcat([image_data_pair[0], image_data_pair[1]])
             img_concat = cv2.cvtColor(img_concat, cv2.COLOR_GRAY2RGB)
@@ -1981,9 +1652,6 @@ class StereoCalibration(object):
                     epi_error_sum += curr_epipolar_error
                 localError = epi_error_sum / len(corners_l)
                 image_epipolar_color.append(corner_epipolar_color)
-                if self.traceLevel == 2 or self.traceLevel == 3 or self.traceLevel == 4 or self.traceLevel == 10:
-                    print("Epipolar Error per image on host in " + img_pth_right.name + " : " +
-                        str(localError))
             else:
                 print('Numer of corners is in left -> and right ->')
                 return -1
@@ -2005,7 +1673,7 @@ class StereoCalibration(object):
         avg_epipolar = epi_error_sum / total_corners
         print("Average Epipolar Error is : " + str(avg_epipolar))
 
-        if self.enable_rectification_disp:
+        if self._enable_rectification_disp:
             self.display_rectification(image_data_pairs, imgpoints_l, imgpoints_r, image_epipolar_color, isHorizontal)
 
         return avg_epipolar
@@ -2016,7 +1684,7 @@ class StereoCalibration(object):
         print("Mesh path")
         print(curr_path)
 
-        if self.cameraModel == "perspective":
+        if self._cameraModel == "perspective":
             map_x_l, map_y_l = cv2.initUndistortRectifyMap(
                 self.M1, self.d1, self.R1, self.M2, self.img_shape, cv2.CV_32FC1)
             map_x_r, map_y_r = cv2.initUndistortRectifyMap(
