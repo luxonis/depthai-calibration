@@ -1,173 +1,222 @@
-from typing import Dict, Any, Callable, Iterable, TypeVar, Generic
-from collections.abc import Iterable
+from typing import Dict, Any, Callable, Iterable, Tuple, TypeVar, Generic, List
+from collections import abc
 import multiprocessing
 import random
 import queue
 
-R = TypeVar('R')
+T = TypeVar('T')
 
-class ParallelTask(Generic[R]):
-  def __init__(self, fun: Callable[..., R], args: Iterable[Any] = (), kwargs: Dict[str, Any] = {}):
+def allArgs(args, kwargs):
+  for arg in args:
+    yield arg
+  for kwarg in kwargs.values():
+    yield kwarg
+
+class Retvals:
+  def __init__(self, taskOrGroup: 'ParallelTask', key: slice | tuple | int):
+    self._taskOrGroup = taskOrGroup
+    self._key = key
+
+  def ret(self):
+    if isinstance(self._key, list | tuple):
+      ret = self._taskOrGroup.ret()
+      return [ret[i] for i in self._key]
+    return self._taskOrGroup.ret()[self._key]
+
+  def finished(self):
+    return self._taskOrGroup.finished()
+
+class ParallelTask(Generic[T]):
+  def __init__(self, worker: 'ParallelWorker', fun, args, kwargs):
+    self._worker = worker
     self._fun = fun
     self._args = args
     self._kwargs = kwargs
+    self._ret = None
+    self._exc = None
     self._id = random.getrandbits(64)
-    self._retvals = None
+    self._finished = False
+
+  def __getitem__(self, key):
+    return Retvals(self, key)
 
   def __repr__(self):
     return f'<Task {self._fun} {self._id}>'
 
-  # For accessing task return values
-  def __iter__(self):
-    yield Retvals[R](task=self)
+  def resolveArguments(self) -> None:
+    def _replace(args):
+      for arg in args:
+        if isinstance(arg, ParallelTask | ParallelTaskGroup | Retvals):
+          yield arg.ret()
+        else:
+          yield arg
+    self._args = list(_replace(self._args))
+    for key, value in self._kwargs:
+      if isinstance(value, ParallelTask | ParallelTaskGroup | Retvals):
+        self._kwargs[key] = value.ret()
 
-  def __getitem__(self, key):
-    return Retvals[R](task=self, key=key)
-
-  @property
-  def retvals(self) -> R:
-    return self._retvals
-
-  def _canExecute(self) -> bool:
-    for arg in self._args:
-      if isinstance(arg, Retvals) and not arg.resolved():
-        return False
-    for kwargs in self._kwargs.values():
-      if isinstance(kwargs, Retvals) and not kwargs.resolved():
+  def isExecutable(self) -> bool:
+    for arg in allArgs(self._args, self._kwargs):
+      if isinstance(arg, ParallelTask | ParallelTaskGroup | Retvals) and not arg.finished():
         return False
     return True
 
-  def _substituteArgs(self):
-    newargs = []
-    for arg in self._args:
-      if isinstance(arg, Retvals):
-        rev = arg.get()
-        newargs.extend(rev)
-      else:
-        newargs.append(arg)
-    self._args = newargs
+  def finished(self) -> bool:
+    return self._finished
 
-    for key, value in self._kwargs.items():
-      if isinstance(value, Retvals):
-        self._kwargs[key] = value.get()
+  def finish(self, ret, exc) -> None:
+    self._ret = ret
+    self._exc = exc
+    self._finished = True
 
-class ParallelTaskGroup:
-  def __init__(self, fun: Callable[[Any], Any], args: Iterable[Iterable[Any]] = [], kwargs: Iterable[Dict[str, Any]] = []):
-    if len(args) != 0 and len(kwargs) != 0 and len(args) != len(kwargs):
-      raise RuntimeError('The length of args and kwargs must match, or one must not be provided')
-    if len(args) == 0:
-      args = [()] * len(kwargs)
-    if len(kwargs) == 0:
-      kwargs = [{}] * len(args)
+  def exc(self) -> BaseException | None:
+    return self._exc
+
+  def ret(self) -> T | None:
+    return self._ret
+
+class ParallelTaskGroup(Generic[T]):
+  def __init__(self, fun, args, kwargs):
     self._fun = fun
     self._args = args
     self._kwargs = kwargs
-    def _mapTask(args_kwargs):
-      args, kwargs = args_kwargs
-      if not isinstance(args, (tuple, list)):
-        args = [args]
-      return ParallelTask(self._fun, args, kwargs)
-    self._tasks = list(map(_mapTask, zip(self._args, self._kwargs)))
-
-  # For accessing task return values
-  def __iter__(self):
-    yield Retvals(taskGroup=self)
 
   def __getitem__(self, key):
-    return Retvals(taskGroup=self, key=key)
+    return Retvals(self, key)
 
-class Retvals(Generic[R]):
-  def __init__(self, task: ParallelTask = None, taskGroup: ParallelTaskGroup = None, key: slice | tuple | int = None):
-    self._task = task
-    self._taskGroup = taskGroup
-    self._key = key
+  def finished(self) -> bool:
+    for task in self._tasks:
+      if not task.finished():
+        return False
+    return True
 
-  def resolved(self) -> bool:
-    if self._task:
-      return self._task._retvals is not None
-    else:
-      for task in self._taskGroup._tasks:
-        if task._retvals is None:
-          return False
-      return True
+  def exc(self) -> List[BaseException | None]:
+    return list(map(lambda t: t.exc(), self._tasks))
 
-  def get(self) -> R:
-    if self._task:
-      if self._key is None:
-        if isinstance(self._task._retvals, tuple):
-          return self._task._retvals
+  def tasks(self) -> List[ParallelTask]:
+    nTasks = 1
+    for arg in allArgs(self._args, self._kwargs):
+      if isinstance(arg, abc.Sized):
+        nTasks = max(nTasks, len(arg))
+      elif isinstance(arg, ParallelTask | Retvals):
+        nTasks = max(nTasks, len(arg.ret()))
+    self._tasks = []
+    for arg in allArgs(self._args, self._kwargs):
+      if isinstance(arg, abc.Sized) and len(arg) != nTasks:
+        raise RuntimeError('All sized arguments must have the same length or 1')
+    
+    def argsAtI(i: int):
+      for arg in self._args:
+        if isinstance(arg, list):
+          yield arg[i]
+        elif isinstance(arg, ParallelTask | Retvals) and isinstance(arg.ret(), abc.Iterable) and not isinstance(arg.ret(), (str, bytes, dict)):
+          yield arg.ret()[i]
         else:
-          return [self._task._retvals]
-      elif isinstance(self._key, tuple):
-        return [self._task._retvals[i] for i in self._key]
-      elif isinstance(self._key, slice):
-        return self._task._retvals[self._key]
-      return [self._task._retvals[self._key]]
-    else:
-      def lmap(*args):
-        return [list(map(*args))]
-      if self._key is None:
-        return lmap(lambda task: task._retvals, self._taskGroup._tasks)
-      elif isinstance(self._key, tuple):
-        return lmap(lambda task: [task._retvals[i] for i in self._key], self._taskGroup._tasks)
-      elif isinstance(self._key, slice):
-        return lmap(lambda task: task._retvals[self._key], self._taskGroup._tasks)
-      return lmap(lambda task: [task._retvals[self._key]], self._taskGroup._tasks)
+          yield arg
+    def kwargsAtI(i: int):
+      newKwargs = {}
+      for key, value in self._kwargs:
+        if isinstance(arg, abc.Sized):
+          newKwargs[key] = value[i]
+        else:
+          newKwargs[key] = value
+      return newKwargs
 
-  def __repr__(self):
-    if self._task:
-      return f'<Retvals <key:{self._key}> of {self._task}>'
-    else:
-      return f'<Retvals <key:{self._key}> of {self._taskGroup}>'
+    for i in range(nTasks):
+      task = ParallelTask(self, self._fun, list(argsAtI(i)), kwargsAtI(i))
+      self._tasks.append(task)
+    return self._tasks
+
+  def ret(self) -> List[T | None]:
+    def zip_retvals(tasks):
+      def _iRet(i):
+        for task in tasks:
+          yield task.ret()[i]
+
+      l = len(tasks[0].ret()) if isinstance(tasks[0].ret(), abc.Sized) else 1
+      if l > 1:
+        for i in range(len(tasks[0].ret())):
+          yield list(_iRet(i))
+      else:
+        for task in tasks:
+          yield task.ret()
+
+    return list(zip_retvals(self._tasks))
+
+  def isExecutable(self) -> bool:
+    for arg in allArgs(self._args, self._kwargs):
+      if isinstance(arg, ParallelTask | ParallelTaskGroup | Retvals) and not arg.finished():
+        return False
+    return True
 
 def worker_controller(_stop: multiprocessing.Event, _in: multiprocessing.Queue, _out: multiprocessing.Queue, _wId: int) -> None:
   while not _stop.is_set():
     try:
-      task: ParallelTask | None = _in.get(timeout=0.1)
+      task: ParallelTask | None = _in.get(timeout=0.01)
     except queue.Empty:
       continue
-    retvals = task._fun(*task._args, **task._kwargs)
-    _out.put((task._id, retvals))
+    #try:
+    ret, exc = None, None
+    ret = task._fun(*task._args, **task._kwargs)
+    #except BaseException as e:
+      #exc = e
+    #finally:
+    _out.put((task._id, ret, exc))
 
-class ParallelWorker:
+class ParallelWorker(Generic[T]):
   def __init__(self, workers: int = 16):
-    self._workerIn = multiprocessing.Queue()
-    self._workerOut = multiprocessing.Queue()
-    self._stop = multiprocessing.Event()
-    self._workers = []
+    self._workers = workers
+    self._tasks: List[ParallelTask] = []
 
-    for i in range(workers):
-      p = multiprocessing.Process(target=worker_controller, args=(self._stop, self._workerIn, self._workerOut, i))
-      self._workers.append(p)
+  def __enter__(self):
+    return self
+
+  def __exit__(self, exc_type, exc_value, exc_traceback):
+    self.execute()
+
+  def run(self, fun: Callable[[Any], T], *args: Tuple[Any], **kwargs: Dict[str, Any]) -> ParallelTask[T]:
+    task = ParallelTask(self, fun, args, kwargs)
+    self._tasks.append(task)
+    return task
+
+  def map(self, fun: Callable[[Any], T], *args: Tuple[Iterable[Any]], **kwargs: Dict[str, Iterable[Any]]) -> ParallelTaskGroup[T]:
+    taskGroup = ParallelTaskGroup(fun, args, kwargs)
+    self._tasks.append(taskGroup)
+    return taskGroup
+
+  def execute(self):
+    workerIn = multiprocessing.Manager().Queue()
+    workerOut = multiprocessing.Manager().Queue()
+    stop = multiprocessing.Event()
+    processes = []
+    for i in range(self._workers):
+      p = multiprocessing.Process(target=worker_controller, args=(stop, workerIn, workerOut, i))
+      processes.append(p)
       p.start()
 
-  def _iterTasks(self, tasks: Iterable[ParallelTask]):
-    for task in tasks:
-      if isinstance(task, ParallelTaskGroup):
-        for task in task._tasks:
-          yield task
-      else:
-        yield task
-
-  def execute(self, tasks: Iterable[ParallelTask]) -> None:
-    tasks = list(self._iterTasks(tasks))
     doneTasks = []
-    remaining = len(tasks)
-    while remaining != 0:
-      for task in tasks:
-        if task._canExecute():
-          task._substituteArgs()
-          self._workerIn.put(task)
-          doneTasks.append(task)
-          tasks.remove(task)
+    remaining = len(self._tasks)
 
-      if not self._workerOut.empty():
-        tId, retvals = self._workerOut.get()
-        remaining -= 1
+    while remaining > 0:
+      for task in self._tasks:
+        if task.isExecutable():
+          if isinstance(task, ParallelTask):
+            task.resolveArguments()
+            workerIn.put(task)
+            doneTasks.append(task)
+            self._tasks.remove(task)
+          else:
+            newTasks = task.tasks()
+            remaining += len(newTasks) - 1
+            self._tasks.extend(newTasks)
+            self._tasks.remove(task)
+
+      if not workerOut.empty():
+        tId, ret, exc = workerOut.get()
         for task in doneTasks:
           if task._id == tId:
-            task._retvals = retvals
-
-    self._stop.set()
-    for worker in self._workers:
-      worker.join()
+            task.finish(ret, exc)
+            remaining -= 1
+    stop.set()
+    for p in processes:
+      p.join()

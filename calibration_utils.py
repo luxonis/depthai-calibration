@@ -94,7 +94,7 @@ class StereoExceptions(Exception):
         """
         return f"'{self.args[0]}' (occured during stage '{self.stage}')"
 
-def estimate_pose_and_filter_single(calibration, corners, ids, K, d, min_inliers, max_threshold, threshold_stepper):
+def estimate_pose_and_filter_single(calibration, cam_info, corners, ids):
     board = calibration._board
     
     objpoints = np.array([board.chessboardCorners[id] for id in ids], dtype=np.float32)
@@ -104,10 +104,10 @@ def estimate_pose_and_filter_single(calibration, corners, ids, K, d, min_inliers
     
     objects = []
     all_objects = []
-    while len(objects) < len(objpoints[:,0,0]) * min_inliers:
-        if ini_threshold > max_threshold:
+    while len(objects) < len(objpoints[:,0,0]) * cam_info['min_inliers']:
+        if ini_threshold > cam_info['max_threshold']:
             break
-        ret, rvec, tvec, objects  = cv2.solvePnPRansac(objpoints, corners, K, d, flags = cv2.SOLVEPNP_P3P, reprojectionError = ini_threshold,  iterationsCount = 10000, confidence = 0.9)
+        ret, rvec, tvec, objects  = cv2.solvePnPRansac(objpoints, corners, cam_info['intrinsics'], cam_info['dist_coeff'], flags = cv2.SOLVEPNP_P3P, reprojectionError = ini_threshold,  iterationsCount = 10000, confidence = 0.9)
         all_objects.append(objects)
         imgpoints2 = objpoints.copy()
 
@@ -115,15 +115,15 @@ def estimate_pose_and_filter_single(calibration, corners, ids, K, d, min_inliers
         all_corners2 = np.array([all_corners2[id[0]] for id in objects])
         imgpoints2 = np.array([imgpoints2[id[0]] for id in objects])
 
-        ret, rvec, tvec = cv2.solvePnP(imgpoints2, all_corners2, K, d)
+        ret, rvec, tvec = cv2.solvePnP(imgpoints2, all_corners2, cam_info['intrinsics'], cam_info['dist_coeff'])
         
-        ini_threshold += threshold_stepper
+        ini_threshold += cam_info['threshold_stepper']
     if not ret:
         raise RuntimeError('Exception') # TODO : Handle
     
     if ids is not None and corners.size > 0:
         ids = ids.flatten()  # Flatten the IDs from 2D to 1D
-        imgpoints2, _ = cv2.projectPoints(objpoints, rvec, tvec, K, d)
+        imgpoints2, _ = cv2.projectPoints(objpoints, rvec, tvec, cam_info['intrinsics'], cam_info['dist_coeff'])
         corners2 = corners.reshape(-1, 2)
         imgpoints2 = imgpoints2.reshape(-1, 2)
 
@@ -141,7 +141,7 @@ def estimate_pose_and_filter_single(calibration, corners, ids, K, d, min_inliers
         #filtered_corners.append(corners2[valid_mask].reshape(-1, 1, 2))   # Collect valid corners for calibration
 
         #removed_corners.extend(corners2[removed_mask])
-        return valid_ids.reshape(-1, 1).astype(np.int32), corners2[valid_mask].reshape(-1, 1, 2), corners2[removed_mask]
+        return corners2[valid_mask].reshape(-1, 1, 2), valid_ids.reshape(-1, 1).astype(np.int32), corners2[removed_mask]
 
 def get_features(calibration, features, charucos, cam_info):
     all_features, all_ids, imsize = calibration.getting_features(cam_info['images_path'], cam_info['width'], cam_info['height'], features=features, charucos=charucos)
@@ -183,27 +183,28 @@ def estimate_pose_and_filter(calibration, cam_info, allCorners, allIds):
 
 
 def calibrate_charuco(calibration, cam_info, filteredCorners, filteredIds):
-    if sum([len(corners) < 4 for corners in filteredCorners]) > 0.15 * len(filteredCorners):
-        raise RuntimeError(f"More than 1/4 of images has less than 4 corners for {cam_info['name']}")
+    # TODO : If we still need this check it needs to be elsewhere
+    # if sum([len(corners) < 4 for corners in filteredCorners]) > 0.15 * len(filteredCorners): 
+    #     raise RuntimeError(f"More than 1/4 of images has less than 4 corners for {cam_info['name']}")
 
     distortion_flags = calibration.get_distortion_flags(cam_info['distortion_model'])
     flags = cv2.CALIB_USE_INTRINSIC_GUESS + distortion_flags
             
-    try:
-        (ret, camera_matrix, distortion_coefficients,
-                 rotation_vectors, translation_vectors,
-                 stdDeviationsIntrinsics, stdDeviationsExtrinsics,
-                 perViewErrors) = cv2.aruco.calibrateCameraCharucoExtended(
-                    charucoCorners=filteredCorners,
-                    charucoIds=filteredIds,
-                    board=calibration._board,
-                    imageSize=cam_info['imsize'],
-                    cameraMatrix=cam_info['intrinsics'],
-                    distCoeffs=cam_info['dist_coeff'],
-                    flags=flags,
-                    criteria=(cv2.TERM_CRITERIA_EPS & cv2.TERM_CRITERIA_COUNT, 1000, 1e-6))
-    except:
-        return f"First intrisic calibration failed for {cam_info['imsize']}", None, None
+    #try:
+    (ret, camera_matrix, distortion_coefficients,
+             rotation_vectors, translation_vectors,
+             stdDeviationsIntrinsics, stdDeviationsExtrinsics,
+             perViewErrors) = cv2.aruco.calibrateCameraCharucoExtended(
+                charucoCorners=filteredCorners,
+                charucoIds=filteredIds,
+                board=calibration._board,
+                imageSize=cam_info['imsize'],
+                cameraMatrix=cam_info['intrinsics'],
+                distCoeffs=cam_info['dist_coeff'],
+                flags=flags,
+                criteria=(cv2.TERM_CRITERIA_EPS & cv2.TERM_CRITERIA_COUNT, 1000, 1e-6))
+    #except:
+    #    return f"First intrisic calibration failed for {cam_info['imsize']}", None, None
 
     cam_info['intrinsics'] = camera_matrix
     cam_info['dist_coeff'] = distortion_coefficients
@@ -351,27 +352,28 @@ class StereoCalibration(object):
 
         tasks = []
         camInfos = []
+        pw = ParallelWorker(16)
         if per_ccm:
             for cam, cam_info in activeCameras:
-                ret = ParallelTask(get_features, [self, features, charucos[cam_info['name']], cam_info])
+                ret = pw.run(get_features, self, features, charucos[cam_info['name']], cam_info)
                 if self._cameraModel == "fisheye":
-                    ret2 = ParallelTask(filter_features_fisheye, [self, ret[0], intrinsic_img, ret[1], ret[2]])
+                    ret2 = pw.run(filter_features_fisheye, self, ret[0], intrinsic_img, ret[1], ret[2])
                 else:
-                    featuresAndIds = ParallelTask(estimate_pose_and_filter, [self, *ret])
+                    #featuresAndIds = ParallelTask(estimate_pose_and_filter, [self, *ret])
+                    featuresAndIds = pw.map(estimate_pose_and_filter_single, self, ret[0], ret[1], ret[2])
+        #estimate_pose_and_filter_single(calibration, a, b, cam_info['intrinsics'], cam_info['dist_coeff'], cam_info['min_inliers'], cam_info['max_threshold'], cam_info['threshold_stepper'])
                     
-                    ret2 = ParallelTask(calibrate_charuco, [self, ret[0], *featuresAndIds])
-                ret3 = ParallelTask(calibrate_ccm_intrinsics_per_ccm, [self, features, *ret2, *featuresAndIds])
+                    ret2 = pw.run(calibrate_charuco, self, ret[0], featuresAndIds[0], featuresAndIds[1])
+                ret3 = pw.run(calibrate_ccm_intrinsics_per_ccm, self, features, ret2, featuresAndIds[0], featuresAndIds[1])
                 tasks.extend([ret, ret2, ret3, featuresAndIds])
                 camInfos.append((cam, ret3))
         else:
             for cam, cam_info in activeCameras:
                 cam_info = calibrate_ccm_intrinsics(self, cam_info, charucos[cam_info['name']])
 
-        pw = ParallelWorker(16)
-        pw.execute(tasks)
-
+        pw.execute()
         for cam, cam_info in camInfos:
-            board_config['cameras'][cam] = cam_info.retvals
+            board_config['cameras'][cam] = cam_info.ret()
             
 
         for left, right in stereoPairs:
