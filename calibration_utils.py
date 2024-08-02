@@ -539,7 +539,7 @@ class StereoCalibration(object):
             cam_info = load_camera_data(self, filepath, cam_info, self._cameraModel, self.ccm_model, self.model, charucos, resizeWidth, resizeHeight)
 
         tasks = []
-        camInfos = []
+        camInfos = {}
         pw = ParallelWorker(16)
         if PER_CCM:
             for cam, cam_info in activeCameras:
@@ -554,43 +554,40 @@ class StereoCalibration(object):
                     ret2 = pw.run(calibrate_charuco, self, ret[0], featuresAndIds[0], featuresAndIds[1])
                 ret3 = pw.run(calibrate_ccm_intrinsics_per_ccm, self, features, ret2, featuresAndIds[0], featuresAndIds[1])
                 tasks.extend([ret, ret2, ret3, featuresAndIds])
-                camInfos.append((cam, ret3))
+                camInfos[cam] = ret3
         else:
             for cam, cam_info in activeCameras:
                 cam_info = calibrate_ccm_intrinsics(self, cam_info, charucos[cam_info['name']])
 
-        pw.execute()
-        for cam, cam_info in camInfos:
-            board_config['cameras'][cam] = cam_info.ret()
-            
-
         for left, right in stereoPairs:
-            calibration = self
-            left_cam_info = board_config['cameras'][left]
-            right_cam_info = board_config['cameras'][left_cam_info['extrinsics']['to_cam']]
+            left_cam_info = camInfos[left]
+            right_cam_info = camInfos[right]
 
             if PER_CCM and EXTRINSICS_PER_CCM:
-                left_cam_info, right_cam_info = remove_and_filter_stereo_features(calibration, left_cam_info, right_cam_info)
+                left_cam_info_and_right_cam_info = pw.run(remove_and_filter_stereo_features, self, left_cam_info, right_cam_info)
 
-            left_corners_sampled, right_corners_sampled, obj_pts = find_stereo_common_features(calibration, left_cam_info, right_cam_info)
+            ret = pw.run(find_stereo_common_features, self, left_cam_info, right_cam_info)
+            left_corners_sampled, right_corners_sampled, obj_pts = ret[0], ret[1], ret[2]
 
             if PER_CCM and EXTRINSICS_PER_CCM:
                 if left_cam_info['calib_model'] == "perspective":
-                    left_corners_sampled = undistort_points_perspective(left_corners_sampled, left_cam_info)
-                    right_corners_sampled = undistort_points_perspective(right_corners_sampled, right_cam_info)
+                    left_corners_sampled = pw.run(undistort_points_perspective, left_corners_sampled, left_cam_info)
+                    right_corners_sampled = pw.run(undistort_points_perspective, right_corners_sampled, right_cam_info)
                 else:
-                    left_corners_sampled = undistort_points_fisheye(left_corners_sampled, left_cam_info)
-                    right_corners_sampled = undistort_points_fisheye(right_corners_sampled, right_cam_info)
+                    left_corners_sampled = pw.run(undistort_points_fisheye, left_corners_sampled, left_cam_info)
+                    right_corners_sampled = pw.run(undistort_points_fisheye, right_corners_sampled, right_cam_info)
 
                 if features == None or features == "charucos": 
-                    extrinsics = calibrate_stereo_perspective_per_ccm(calibration, obj_pts, left_corners_sampled, right_corners_sampled, left_cam_info, right_cam_info)
+                    extrinsics = pw.run(calibrate_stereo_perspective_per_ccm, self, obj_pts, left_corners_sampled, right_corners_sampled, left_cam_info, right_cam_info)
                 #### ADD OTHER CALIBRATION METHODS ###
             else:
-                if calibration._cameraModel == 'perspective':
-                    extrinsics = calibrate_stereo_perspective(calibration, obj_pts, left_corners_sampled, right_corners_sampled, left_cam_info, right_cam_info)
-                elif calibration._cameraModel == 'fisheye':
-                    extrinsics = calibrate_stereo_fisheye(calibration, obj_pts, left_corners_sampled, right_corners_sampled, left_cam_info, right_cam_info)
-            calculate_epipolar_error(left_cam_info, right_cam_info, left, right, board_config, extrinsics)
+                if self._cameraModel == 'perspective':
+                    extrinsics = pw.run(calibrate_stereo_perspective, self, obj_pts, left_corners_sampled, right_corners_sampled, left_cam_info, right_cam_info)
+                elif self._cameraModel == 'fisheye':
+                    extrinsics = pw.run(calibrate_stereo_fisheye, self, obj_pts, left_corners_sampled, right_corners_sampled, left_cam_info, right_cam_info)
+            pw.run(calculate_epipolar_error, left_cam_info, right_cam_info, left, right, board_config, extrinsics)
+            
+        pw.execute()
 
         return 1, board_config
 
