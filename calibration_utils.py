@@ -1,47 +1,25 @@
 #!/usr/bin/env python3
 
-import cv2
-import glob
-import os
-import shutil
-import numpy as np
 from scipy.spatial.transform import Rotation
-import multiprocessing
-from multiprocessing.pool import ThreadPool
-
-import time
-import json
-import cv2.aruco as aruco
-import threading
-import logging
-logging.getLogger('matplotlib').setLevel(logging.WARNING)
-
-from pathlib import Path
-from functools import reduce
-from collections import deque
-from typing import Optional
-import matplotlib.pyplot as plt
-from scipy.interpolate import griddata
-plt.rcParams.update({'font.size': 16})
-from .worker import ParallelTask, ParallelTaskGroup, ParallelWorker
 import matplotlib.colors as colors
+from .worker import ParallelWorker
+import matplotlib.pyplot as plt
+from collections import deque
+import cv2.aruco as aruco
+from pathlib import Path
+import multiprocessing
+import numpy as np
 import logging
+import time
+import glob
+import cv2
+
 logging.getLogger('matplotlib').setLevel(logging.WARNING)
-per_ccm = True
-extrinsic_per_ccm = False
-cdict = {'red':  ((0.0, 0.0, 0.0),   # no red at 0
-          (0.5, 1.0, 1.0),   # all channels set to 1.0 at 0.5 to create white
-          (1.0, 0.8, 0.8)),  # set to 0.8 so its not too bright at 1
-'green': ((0.0, 0.8, 0.8),   # set to 0.8 so its not too bright at 0
-          (0.5, 1.0, 1.0),   # all channels set to 1.0 at 0.5 to create white
-          (1.0, 0.0, 0.0)),  # no green at 1
-'blue':  ((0.0, 0.0, 0.0),   # no blue at 0
-          (0.5, 1.0, 1.0),   # all channels set to 1.0 at 0.5 to create white
-          (1.0, 0.0, 0.0))   # no blue at 1
-}
-initial_max_threshold = 15
-initial_min_filtered = 0.05
-calibration_max_threshold = 10
+
+plt.rcParams.update({'font.size': 16})
+
+PER_CCM = True
+EXTRINSICS_PER_CCM = False
 
 class ProxyDict:
   def __init__(self, squaresX, squaresY, squareSize, markerSize, dictSize):
@@ -74,10 +52,6 @@ class ProxyDict:
       self.__build()
     return self._board
 
-def distance(point1, point2):
-    return np.sqrt((point1[0] - point2[0])**2 + (point1[1] - point2[1])**2)
-# Creates a set of 13 polygon coordinates
-rectProjectionMode = 0
 
 colors = [(0, 255 , 0), (0, 0, 255)]
 
@@ -353,7 +327,7 @@ class StereoCalibration(object):
         tasks = []
         camInfos = []
         pw = ParallelWorker(16)
-        if per_ccm:
+        if PER_CCM:
             for cam, cam_info in activeCameras:
                 ret = pw.run(get_features, self, features, charucos[cam_info['name']], cam_info)
                 if self._cameraModel == "fisheye":
@@ -430,7 +404,7 @@ class StereoCalibration(object):
             [specTranslation['x'], specTranslation['y'], specTranslation['z']], dtype=np.float32)
         rotation = Rotation.from_euler(
             'xyz', [rot['r'], rot['p'], rot['y']], degrees=True).as_matrix().astype(np.float32)
-        if per_ccm and extrinsic_per_ccm:
+        if PER_CCM and EXTRINSICS_PER_CCM:
             if left_cam_info["name"] in self.extrinsic_img or right_cam_info["name"] in self.extrinsic_img:
                 if left_cam_info["name"] in self.extrinsic_img:
                     array = self.extrinsic_img[left_cam_info["name"]]
@@ -470,7 +444,7 @@ class StereoCalibration(object):
             scale = right_cam_info['intrinsics'][0][0]
         else:
             scale = left_cam_info['intrinsics'][0][0]
-        if per_ccm and extrinsic_per_ccm:
+        if PER_CCM and EXTRINSICS_PER_CCM:
             scale = ((left_cam_info['intrinsics'][0][0]*right_cam_info['intrinsics'][0][0] + left_cam_info['intrinsics'][1][1]*right_cam_info['intrinsics'][1][1])/2)
             print(f"Epipolar error {extrinsics[0]*np.sqrt(scale)}")
             left_cam_info['extrinsics']['epipolar_error'] = extrinsics[0]*np.sqrt(scale)
@@ -1199,7 +1173,7 @@ class StereoCalibration(object):
 
         stereocalib_criteria = (cv2.TERM_CRITERIA_COUNT +
                                 cv2.TERM_CRITERIA_EPS, 300, 1e-9)
-        if per_ccm and extrinsic_per_ccm:
+        if PER_CCM and EXTRINSICS_PER_CCM:
             for i in range(len(left_corners_sampled)):
                 if left_calib_model == "perspective":
                     left_corners_sampled[i] = cv2.undistortPoints(np.array(left_corners_sampled[i]), cameraMatrix_l, distCoeff_l, P=cameraMatrix_l)
