@@ -243,7 +243,15 @@ def calibrate_ccm_intrinsics(calibration, cam_info, charucos):
 
     return cam_info
 
-def calibrate_stereo_perspective(calibration, obj_pts, left_corners_sampled, right_corners_sampled, cameraMatrix_l, distCoeff_l, cameraMatrix_r, distCoeff_r, left_distortion_model, r_in, t_in):
+def calibrate_stereo_perspective(calibration, obj_pts, left_corners_sampled, right_corners_sampled, cameraMatrix_l, distCoeff_l, cameraMatrix_r, distCoeff_r, left_distortion_model, left_cam_info):
+    specTranslation = left_cam_info['extrinsics']['specTranslation']
+    rot = left_cam_info['extrinsics']['rotation']
+
+    t_in = np.array(
+        [specTranslation['x'], specTranslation['y'], specTranslation['z']], dtype=np.float32)
+    r_in = Rotation.from_euler(
+        'xyz', [rot['r'], rot['p'], rot['y']], degrees=True).as_matrix().astype(np.float32)
+    
     flags = 0
     # flags |= cv2.CALIB_USE_EXTRINSIC_GUESS
     # print(flags)
@@ -277,7 +285,15 @@ def calibrate_stereo_perspective(calibration, obj_pts, left_corners_sampled, rig
 
     return [ret, R, T, R_l, R_r, P_l, P_r]
 
-def calibrate_stereo_perspective_per_ccm(calibration, obj_pts, left_corners_sampled, right_corners_sampled, cameraMatrix_l, distCoeff_l, cameraMatrix_r, distCoeff_r, r_in, t_in):
+def calibrate_stereo_perspective_per_ccm(calibration, obj_pts, left_corners_sampled, right_corners_sampled, cameraMatrix_l, distCoeff_l, cameraMatrix_r, distCoeff_r, left_cam_info):
+    specTranslation = left_cam_info['extrinsics']['specTranslation']
+    rot = left_cam_info['extrinsics']['rotation']
+
+    t_in = np.array(
+        [specTranslation['x'], specTranslation['y'], specTranslation['z']], dtype=np.float32)
+    r_in = Rotation.from_euler(
+        'xyz', [rot['r'], rot['p'], rot['y']], degrees=True).as_matrix().astype(np.float32)
+
     flags = cv2.CALIB_FIX_INTRINSIC
     ret, M1, d1, M2, d2, R, T, E, F, _ = cv2.stereoCalibrateExtended(
     obj_pts, left_corners_sampled, right_corners_sampled,
@@ -388,51 +404,21 @@ def undistort_points_fisheye(corners, R, d):
         corners[i] = cv2.fisheye.undistortPoints(np.array(corners[i]), R, d, P=R)
     return corners
 
-def calibrate_stereo_pair(calibration, left_cam, right_cam, board_config, features):
-    left_cam_info = board_config['cameras'][left_cam]
-    right_cam_info = board_config['cameras'][left_cam_info['extrinsics']['to_cam']]
-    print('<-------------Extrinsics calibration of {} and {} ------------>'.format(
-        left_cam_info['name'], right_cam_info['name']))
-
-    specTranslation = left_cam_info['extrinsics']['specTranslation']
-    rot = left_cam_info['extrinsics']['rotation']
-
-    translation = np.array(
-        [specTranslation['x'], specTranslation['y'], specTranslation['z']], dtype=np.float32)
-    rotation = Rotation.from_euler(
-        'xyz', [rot['r'], rot['p'], rot['y']], degrees=True).as_matrix().astype(np.float32)
-    if PER_CCM and EXTRINSICS_PER_CCM:
-        if left_cam_info["name"] in calibration.extrinsic_img or right_cam_info["name"] in calibration.extrinsic_img:
-            if left_cam_info["name"] in calibration.extrinsic_img:
-                array = calibration.extrinsic_img[left_cam_info["name"]]
-            elif right_cam_info["name"] in calibration.extrinsic_img:
-                array = calibration.extrinsic_img[left_cam_info["name"]]
-                
+def remove_and_filter_stereo_features(calibration, left_cam_info, right_cam_info):
+    if left_cam_info["name"] in calibration.extrinsic_img or right_cam_info["name"] in calibration.extrinsic_img:
+        if left_cam_info["name"] in calibration.extrinsic_img:
+            array = calibration.extrinsic_img[left_cam_info["name"]]
+        elif right_cam_info["name"] in calibration.extrinsic_img:
+            array = calibration.extrinsic_img[left_cam_info["name"]]
             
-            left_cam_info['filtered_corners'], left_cam_info['filtered_ids'], filtered_images = calibration.remove_features(left_cam_info['filtered_corners'], left_cam_info['filtered_ids'], array)
-            right_cam_info['filtered_corners'], right_cam_info['filtered_ids'], filtered_images = calibration.remove_features(right_cam_info['filtered_corners'], right_cam_info['filtered_ids'], array)
-            removed_features, left_cam_info['filtered_corners'], left_cam_info['filtered_ids'], _, _ = calibration.filtering_features(left_cam_info['filtered_corners'], left_cam_info['filtered_ids'], left_cam_info["name"],left_cam_info["imsize"],left_cam_info["hfov"], left_cam_info['intrinsics'], left_cam_info['dist_coeff'],  left_cam_info['distortion_model'])
-            removed_features, right_cam_info['filtered_corners'], right_cam_info['filtered_ids'], _, _ = calibration.filtering_features(right_cam_info['filtered_corners'], right_cam_info['filtered_ids'], right_cam_info["name"], right_cam_info["imsize"], right_cam_info["hfov"], left_cam_info['intrinsics'], left_cam_info['dist_coeff'], right_cam_info['distortion_model'])
-    
-    #extrinsics = calibrate_stereo(calibration, left_cam_info['filtered_ids'], left_cam_info['filtered_corners'], right_cam_info['filtered_ids'], right_cam_info['filtered_corners'], left_cam_info['intrinsics'], left_cam_info['dist_coeff'], right_cam_info['intrinsics'], right_cam_info['dist_coeff'], translation, rotation, left_cam_info['calib_model'], right_cam_info['calib_model'], left_cam_info['distortion_model'], right_cam_info['distortion_model'], features)
-    left_corners_sampled, right_corners_sampled, obj_pts = find_stereo_common_features(calibration, left_cam_info['filtered_ids'], right_cam_info['filtered_ids'], left_cam_info['filtered_corners'], right_cam_info['filtered_corners'])
+        
+        left_cam_info['filtered_corners'], left_cam_info['filtered_ids'], filtered_images = calibration.remove_features(left_cam_info['filtered_corners'], left_cam_info['filtered_ids'], array)
+        right_cam_info['filtered_corners'], right_cam_info['filtered_ids'], filtered_images = calibration.remove_features(right_cam_info['filtered_corners'], right_cam_info['filtered_ids'], array)
+        removed_features, left_cam_info['filtered_corners'], left_cam_info['filtered_ids'], _, _ = calibration.filtering_features(left_cam_info['filtered_corners'], left_cam_info['filtered_ids'], left_cam_info["name"],left_cam_info["imsize"],left_cam_info["hfov"], left_cam_info['intrinsics'], left_cam_info['dist_coeff'],  left_cam_info['distortion_model'])
+        removed_features, right_cam_info['filtered_corners'], right_cam_info['filtered_ids'], _, _ = calibration.filtering_features(right_cam_info['filtered_corners'], right_cam_info['filtered_ids'], right_cam_info["name"], right_cam_info["imsize"], right_cam_info["hfov"], left_cam_info['intrinsics'], left_cam_info['dist_coeff'], right_cam_info['distortion_model'])
+    return left_cam_info, right_cam_info
 
-    if PER_CCM and EXTRINSICS_PER_CCM:
-        if left_cam_info['calib_model'] == "perspective":
-            left_corners_sampled = undistort_points_perspective(left_corners_sampled, left_cam_info['intrinsics'], left_cam_info['dist_coeff'])
-            right_corners_sampled = undistort_points_perspective(right_corners_sampled, right_cam_info['intrinsics'], right_cam_info['dist_coeff'])
-        else:
-            left_corners_sampled = undistort_points_fisheye(left_corners_sampled, left_cam_info['intrinsics'], left_cam_info['dist_coeff'])
-            right_corners_sampled = undistort_points_fisheye(right_corners_sampled, right_cam_info['intrinsics'], right_cam_info['dist_coeff'])
-
-        if features == None or features == "charucos": 
-            extrinsics = calibrate_stereo_perspective_per_ccm(calibration, obj_pts, left_corners_sampled, right_corners_sampled, left_cam_info['intrinsics'], left_cam_info['dist_coeff'], right_cam_info['intrinsics'], right_cam_info['dist_coeff'], rotation, translation)
-        #### ADD OTHER CALIBRATION METHODS ###
-    else:
-        if calibration._cameraModel == 'perspective':
-            extrinsics = calibrate_stereo_perspective(calibration, obj_pts, left_corners_sampled, right_corners_sampled, left_cam_info['intrinsics'], left_cam_info['dist_coeff'], right_cam_info['intrinsics'], right_cam_info['dist_coeff'], left_cam_info['distortion_model'], rotation, translation)
-        elif calibration._cameraModel == 'fisheye':
-            extrinsics = calibrate_stereo_fisheye(calibration, obj_pts, left_corners_sampled, right_corners_sampled, left_cam_info['intrinsics'], left_cam_info['dist_coeff'], right_cam_info['intrinsics'], right_cam_info['dist_coeff'])
+def calculate_epipolar_error(left_cam_info, right_cam_info, left_cam, right_cam, board_config, extrinsics):
 
     if extrinsics[0] == -1:
         return -1, extrinsics[1]
@@ -457,11 +443,11 @@ def calibrate_stereo_pair(calibration, left_cam, right_cam, board_config, featur
         scale = ((left_cam_info['intrinsics'][0][0]*right_cam_info['intrinsics'][0][0] + left_cam_info['intrinsics'][1][1]*right_cam_info['intrinsics'][1][1])/2)
         print(f"Epipolar error {extrinsics[0]*np.sqrt(scale)}")
         left_cam_info['extrinsics']['epipolar_error'] = extrinsics[0]*np.sqrt(scale)
-        left_cam_info['extrinsics']['stereo_error'] = extrinsics[0]*np.sqrt(scale)
+        left_cam_info['extrinsics']['stereo_error'] = extrinsics[0]*np.sqrt(scale) # TODO :Remove one of these
     else:
         print(f"Epipolar error {extrinsics[0]}")
         left_cam_info['extrinsics']['epipolar_error'] = extrinsics[0]
-        left_cam_info['extrinsics']['stereo_error'] = extrinsics[0]
+        left_cam_info['extrinsics']['stereo_error'] = extrinsics[0] # TODO : Remove one of these
 
     left_cam_info['extrinsics']['rotation_matrix'] = extrinsics[1]
     left_cam_info['extrinsics']['translation'] = extrinsics[2]
@@ -574,7 +560,32 @@ class StereoCalibration(object):
             
 
         for left, right in stereoPairs:
-            calibrate_stereo_pair(self, left, right, board_config, features)
+            calibration = self
+            left_cam_info = board_config['cameras'][left]
+            right_cam_info = board_config['cameras'][left_cam_info['extrinsics']['to_cam']]
+
+            if PER_CCM and EXTRINSICS_PER_CCM:
+                left_cam_info, right_cam_info = remove_and_filter_stereo_features(calibration, left_cam_info, right_cam_info)
+
+            left_corners_sampled, right_corners_sampled, obj_pts = find_stereo_common_features(calibration, left_cam_info['filtered_ids'], right_cam_info['filtered_ids'], left_cam_info['filtered_corners'], right_cam_info['filtered_corners'])
+
+            if PER_CCM and EXTRINSICS_PER_CCM:
+                if left_cam_info['calib_model'] == "perspective":
+                    left_corners_sampled = undistort_points_perspective(left_corners_sampled, left_cam_info['intrinsics'], left_cam_info['dist_coeff'])
+                    right_corners_sampled = undistort_points_perspective(right_corners_sampled, right_cam_info['intrinsics'], right_cam_info['dist_coeff'])
+                else:
+                    left_corners_sampled = undistort_points_fisheye(left_corners_sampled, left_cam_info['intrinsics'], left_cam_info['dist_coeff'])
+                    right_corners_sampled = undistort_points_fisheye(right_corners_sampled, right_cam_info['intrinsics'], right_cam_info['dist_coeff'])
+
+                if features == None or features == "charucos": 
+                    extrinsics = calibrate_stereo_perspective_per_ccm(calibration, obj_pts, left_corners_sampled, right_corners_sampled, left_cam_info['intrinsics'], left_cam_info['dist_coeff'], right_cam_info['intrinsics'], right_cam_info['dist_coeff'], left_cam_info)
+                #### ADD OTHER CALIBRATION METHODS ###
+            else:
+                if calibration._cameraModel == 'perspective':
+                    extrinsics = calibrate_stereo_perspective(calibration, obj_pts, left_corners_sampled, right_corners_sampled, left_cam_info['intrinsics'], left_cam_info['dist_coeff'], right_cam_info['intrinsics'], right_cam_info['dist_coeff'], left_cam_info['distortion_model'], left_cam_info)
+                elif calibration._cameraModel == 'fisheye':
+                    extrinsics = calibrate_stereo_fisheye(calibration, obj_pts, left_corners_sampled, right_corners_sampled, left_cam_info['intrinsics'], left_cam_info['dist_coeff'], right_cam_info['intrinsics'], right_cam_info['dist_coeff'])
+            calculate_epipolar_error(left_cam_info, right_cam_info, left, right, board_config, extrinsics)
 
         return 1, board_config
 
