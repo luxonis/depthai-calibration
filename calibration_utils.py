@@ -426,14 +426,17 @@ def calculate_epipolar_error(left_cam_info, right_cam_info, left_cam, right_cam,
 
     if extrinsics[0] == -1:
         return -1, extrinsics[1]
-
-    if board_config['stereo_config']['left_cam'] == left_cam and board_config['stereo_config']['right_cam'] == right_cam:
-        board_config['stereo_config']['rectification_left'] = extrinsics[3]
-        board_config['stereo_config']['rectification_right'] = extrinsics[4]
-
+    stereoConfig = None
+    if board_config['stereo_config']['left_cam'] == left_cam and board_config['stereo_config']['right_cam'] == right_cam: # TODO : Is this supposed to take the last camera pair?
+        stereoConfig = {
+            'rectification_left': extrinsics[3],
+            'rectification_right': extrinsics[4]
+        }
     elif board_config['stereo_config']['left_cam'] == right_cam and board_config['stereo_config']['right_cam'] == left_cam:
-        board_config['stereo_config']['rectification_left'] = extrinsics[4]
-        board_config['stereo_config']['rectification_right'] = extrinsics[3]
+        stereoConfig = {
+            'rectification_left': extrinsics[4],
+            'rectification_right': extrinsics[3]
+        }
 
     print('<-------------Epipolar error of {} and {} ------------>'.format(
         left_cam_info['name'], right_cam_info['name']))
@@ -455,7 +458,8 @@ def calculate_epipolar_error(left_cam_info, right_cam_info, left_cam, right_cam,
 
     left_cam_info['extrinsics']['rotation_matrix'] = extrinsics[1]
     left_cam_info['extrinsics']['translation'] = extrinsics[2]
-    return board_config
+
+    return left_cam_info, stereoConfig
 
 def load_camera_data(calibration, filepath, cam_info, _cameraModel, ccm_model, model, charucos, resizeWidth, resizeHeight):
     width, height, img_path, calib_model, distortion_model, images_path = calibration.load_camera_data(filepath, cam_info, _cameraModel, ccm_model, model, charucos, resizeWidth, resizeHeight)
@@ -540,6 +544,7 @@ class StereoCalibration(object):
 
         tasks = []
         camInfos = {}
+        stereoConfigs = []
         pw = ParallelWorker(16)
         if PER_CCM:
             for cam, cam_info in activeCameras:
@@ -585,9 +590,19 @@ class StereoCalibration(object):
                     extrinsics = pw.run(calibrate_stereo_perspective, self, obj_pts, left_corners_sampled, right_corners_sampled, left_cam_info, right_cam_info)
                 elif self._cameraModel == 'fisheye':
                     extrinsics = pw.run(calibrate_stereo_fisheye, self, obj_pts, left_corners_sampled, right_corners_sampled, left_cam_info, right_cam_info)
-            pw.run(calculate_epipolar_error, left_cam_info, right_cam_info, left, right, board_config, extrinsics)
-            
+            ret4 = pw.run(calculate_epipolar_error, left_cam_info, right_cam_info, left, right, board_config, extrinsics)
+            camInfos[left] = ret4[0]
+            stereoConfigs.append(ret4[1])
+        
         pw.execute()
+
+        # Extract camera info structs and stereo config
+        for cam, camInfo in camInfos.items():
+            board_config['cameras'][cam] = camInfo.ret()
+        
+        for stereoConfig in stereoConfigs:
+            if stereoConfig.ret():
+                board_config['stereo_config'].update(stereoConfig.ret())
 
         return 1, board_config
 
