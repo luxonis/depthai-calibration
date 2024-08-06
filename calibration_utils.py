@@ -116,7 +116,7 @@ class StereoExceptions(Exception):
     return f"'{self.args[0]}' (occured during stage '{self.stage}')"
 
 def estimate_pose_and_filter_single(config: CalibrationConfig, camData: CameraData, corners, ids):
-  objpoints = np.array([config.board.chessboardCorners[id] for id in ids], dtype=np.float32)
+  objpoints = config.board.chessboardCorners[ids]
 
   ini_threshold=5
   threshold = None
@@ -853,13 +853,6 @@ def compute_reprojection_errors(obj_pts: np.array, img_pts: np.array, K: np.arra
   errs = np.linalg.norm(np.squeeze(proj_pts) - np.squeeze(img_pts), axis = 1)
   return errs
 
-def charuco_ids_to_objpoints(config: CalibrationConfig, ids):
-  one_pts = config.board.chessboardCorners
-  objpts = []
-  for j in range(len(ids)):
-    objpts.append(one_pts[ids[j]])
-  return np.array(objpts)
-
 def analyze_charuco(config: CalibrationConfig, images, scale_req=False, req_resolution=(800, 1280)):
   """
   Charuco base pose estimation.
@@ -952,7 +945,7 @@ def filter_corner_outliers(config: CalibrationConfig, allIds, allCorners, camera
   for i in range(len(allIds)):
     corners = allCorners[i]
     ids = allIds[i]
-    objpts = charuco_ids_to_objpoints(config, ids)
+    objpts = config.board.chessboardCorners[ids]
     if config.cameraModel == "fisheye":
       errs = compute_reprojection_errors(objpts, corners, camera_matrix, distortion_coefficients, rotation_vectors[i], translation_vectors[i], fisheye = True)
     else:
@@ -984,7 +977,7 @@ def calibrate_camera_charuco(config: CalibrationConfig, allCorners, allIds, imsi
   max_threshold = 10 + config.initialMaxThreshold * (hfov / 30 + imsize[1] / 800 * 0.2)
   min_inlier = 1 - config.initialMinFiltered * (hfov / 60 + imsize[1] / 800 * 0.2)
   for corners, ids in zip(allCorners, allIds):
-    objpts = charuco_ids_to_objpoints(config, ids)
+    objpts = config.board.chessboardCorners[ids]
     rvec, tvec, newids = camera_pose_charuco(objpts, corners, ids, cameraIntrinsics, distCoeff)
     tvecs.append(tvec)
     rvecs.append(rvec)
@@ -1067,10 +1060,6 @@ def calibrate_camera_charuco(config: CalibrationConfig, allCorners, allIds, imsi
   return ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, filtered_ids, filtered_corners, allCorners, allIds
 
 def calibrate_fisheye(config: CalibrationConfig, allCorners, allIds, imsize, hfov, name):
-  obj_points = []
-  for i in range(len(allIds)):
-    obj_points.append(charuco_ids_to_objpoints(config, allIds[i]))
-
   f_init = imsize[0]/np.deg2rad(hfov)*1.15
 
   cameraMatrixInit = np.array([[f_init, 0.      , imsize[0]/2],
@@ -1081,16 +1070,18 @@ def calibrate_fisheye(config: CalibrationConfig, allCorners, allIds, imsize, hfo
   rvecs = []
   tvecs = []
   for corners, ids in zip(allCorners, allIds):
-    objpts = charuco_ids_to_objpoints(config, ids)
+    objpts = config.board.chessboardCorners[ids]
     corners_undist = cv2.fisheye.undistortPoints(corners, cameraMatrixInit, distCoeffsInit)
     rvec, tvec, new_ids = camera_pose_charuco(objpts, corners_undist,ids, np.eye(3), np.array((0.0,0,0,0)))
     tvecs.append(tvec)
     rvecs.append(rvec)
+
   corners_removed, filtered_ids, filtered_corners = filter_corner_outliers(config, allIds, allCorners, cameraMatrixInit, distCoeffsInit, rvecs, tvecs)
-  if corners_removed:
-    obj_points = []
-    for i in range(len(filtered_ids)):
-      obj_points.append(charuco_ids_to_objpoints(config, filtered_ids[i]))
+
+  obj_points = []
+  for ids in filtered_ids:
+    obj_points.append(config.board.chessboardCorners[ids])
+  # TODO :Maybe this can be obj_points = config.board.chessboardCorners[filtered_ids]
 
   print("Camera Matrix initialization.............")
   print(cameraMatrixInit)
