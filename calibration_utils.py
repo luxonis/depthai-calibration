@@ -439,29 +439,18 @@ def find_stereo_common_features(config: CalibrationConfig, left_cam_info, right_
   allIds_l, allIds_r, allCorners_l, allCorners_r = left_cam_info['filtered_ids'], right_cam_info['filtered_ids'], left_cam_info['filtered_corners'], right_cam_info['filtered_corners']
   left_corners_sampled = []
   right_corners_sampled = []
-  left_ids_sampled = []
   obj_pts = []
-  one_pts = config.board.chessboardCorners
 
-  for i, ids in enumerate(allIds_l):
-    left_sub_corners = []
-    right_sub_corners = []
-    obj_pts_sub = []
+  for i, ids in enumerate(allIds_l): # For ids in all images
+    commonIds = np.intersect1d(allIds_l[i], allIds_r[i])
+    left_sub_corners = allCorners_l[i][np.isin(allIds_l[i], commonIds)]
+    right_sub_corners = allCorners_r[i][np.isin(allIds_r[i], commonIds)]
+    obj_pts_sub = config.board.chessboardCorners[commonIds]
 
-    for j, id in enumerate(ids):
-      idx = np.where(allIds_r[i] == id)
-      if idx[0].size == 0:
-        continue
-      left_sub_corners.append(allCorners_l[i][j]) # TODO : This copies even idxs that don't match
-      right_sub_corners.append(allCorners_r[i][idx])
-      obj_pts_sub.append(one_pts[id])
     if len(left_sub_corners) > 3 and len(right_sub_corners) > 3:
-      obj_pts.append(np.array(obj_pts_sub, dtype=np.float32))
-      left_corners_sampled.append(
-        np.array(left_sub_corners, dtype=np.float32))
-      left_ids_sampled.append(np.array(ids, dtype=np.int32))
-      right_corners_sampled.append(
-        np.array(right_sub_corners, dtype=np.float32))
+      obj_pts.append(obj_pts_sub)
+      left_corners_sampled.append(left_sub_corners)
+      right_corners_sampled.append(right_sub_corners)
     else:
       return -1, "Stereo Calib failed due to less common features"
   return left_corners_sampled, right_corners_sampled, obj_pts
