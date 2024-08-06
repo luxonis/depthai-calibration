@@ -507,7 +507,6 @@ class StereoCalibration(object):
                 extrinsic_img[cam].sort(reverse=True)
         self.intrinsic_img = intrinsic_img
         self.extrinsic_img = extrinsic_img
-        self._enable_rectification_disp = True
         self._cameraModel = camera_model
         self._data_path = filepath
         self._proxyDict = ProxyDict(squaresX, squaresY, square_size, mrk_size, aruco.DICT_4X4_1000)
@@ -552,9 +551,7 @@ class StereoCalibration(object):
                 if self._cameraModel == "fisheye":
                     ret2 = pw.run(filter_features_fisheye, self, ret[0], intrinsic_img, ret[1], ret[2])
                 else:
-                    #featuresAndIds = ParallelTask(estimate_pose_and_filter, [self, *ret])
                     featuresAndIds = pw.map(estimate_pose_and_filter_single, self, ret[0], ret[1], ret[2])
-        #estimate_pose_and_filter_single(calibration, a, b, cam_info['intrinsics'], cam_info['dist_coeff'], cam_info['min_inliers'], cam_info['max_threshold'], cam_info['threshold_stepper'])
                     
                     ret2 = pw.run(calibrate_charuco, self, ret[0], featuresAndIds[0], featuresAndIds[1])
                 ret3 = pw.run(calibrate_ccm_intrinsics_per_ccm, self, features, ret2, featuresAndIds[0], featuresAndIds[1])
@@ -1547,39 +1544,6 @@ class StereoCalibration(object):
 
                 return [ret, R, T, R_l, R_r, P_l, P_r]
 
-    def display_rectification(self, image_data_pairs, images_corners_l, images_corners_r, image_epipolar_color, isHorizontal):
-        print(
-            "Displaying Stereo Pair for visual inspection. Press the [ESC] key to exit.")
-        for idx, image_data_pair in enumerate(image_data_pairs):
-            if isHorizontal:
-                img_concat = cv2.hconcat(
-                    [image_data_pair[0], image_data_pair[1]])
-                for left_pt, right_pt, colorMode in zip(images_corners_l[idx], images_corners_r[idx], image_epipolar_color[idx]):
-                    cv2.line(img_concat,
-                             (int(left_pt[0][0]), int(left_pt[0][1])), (int(right_pt[0][0]) + image_data_pair[0].shape[1], int(right_pt[0][1])),
-                             colors[colorMode], 1)
-            else:
-                img_concat = cv2.vconcat(
-                    [image_data_pair[0], image_data_pair[1]])
-                for left_pt, right_pt, colorMode in zip(images_corners_l[idx], images_corners_r[idx], image_epipolar_color[idx]):
-                    cv2.line(img_concat,
-                             (int(left_pt[0][0]), int(left_pt[0][1])), (int(right_pt[0][0]), int(right_pt[0][1])  + image_data_pair[0].shape[0]),
-                             colors[colorMode], 1)
-
-            img_concat = cv2.resize(
-                img_concat, (0, 0), fx=0.8, fy=0.8)
-
-            # show image
-            cv2.imshow('Stereo Pair', img_concat)
-            k = cv2.waitKey(1)
-            if k == 27:  # Esc key to stop
-                break
-
-                # os._exit(0)
-                # raise SystemExit()
-
-        cv2.destroyWindow('Stereo Pair')
-
     def scale_image(self, img, scaled_res):
         expected_height = img.shape[0]*(scaled_res[1]/img.shape[1])
 
@@ -1899,9 +1863,6 @@ class StereoCalibration(object):
 
         avg_epipolar = epi_error_sum / total_corners
         print("Average Epipolar Error is : " + str(avg_epipolar))
-
-        if self._enable_rectification_disp:
-            self.display_rectification(image_data_pairs, imgpoints_l, imgpoints_r, image_epipolar_color, isHorizontal)
 
         return avg_epipolar
 
