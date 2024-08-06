@@ -17,6 +17,18 @@ class Retvals:
     self._taskOrGroup = taskOrGroup
     self._key = key
 
+  def __iter__(self): # Allow iterating over slice or list retvals
+    if isinstance(self._key, slice):
+      if not self._key.stop:
+        raise RuntimeError('Cannot iterate over an unknown length Retvals')
+      for i in range(self._key.start or 0, self._key.stop, self._key.step or 1):
+        yield Retvals(self._taskOrGroup, i)
+    elif isinstance(self._key, list | tuple):
+      for i in self._key:
+        yield Retvals(self._taskOrGroup, i)
+    else:
+      yield Retvals(self._taskOrGroup, self._key)
+
   def ret(self):
     if isinstance(self._key, list | tuple):
       ret = self._taskOrGroup.ret()
