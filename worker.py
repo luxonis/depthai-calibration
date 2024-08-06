@@ -1,4 +1,4 @@
-from typing import Dict, Any, Callable, Iterable, Tuple, TypeVar, Generic, List
+from typing import Dict, Any, Callable, Iterable, Tuple, TypeVar, Generic, Sequence, List
 from collections import abc
 import multiprocessing
 import random
@@ -12,12 +12,12 @@ def allArgs(args, kwargs):
   for kwarg in kwargs.values():
     yield kwarg
 
-class Retvals:
+class Retvals(Sequence[T]):
   def __init__(self, taskOrGroup: 'ParallelTask', key: slice | tuple | int):
     self._taskOrGroup = taskOrGroup
     self._key = key
 
-  def __iter__(self): # Allow iterating over slice or list retvals
+  def __iter__(self) -> T: # Allow iterating over slice or list retvals
     if isinstance(self._key, slice):
       if not self._key.stop:
         raise RuntimeError('Cannot iterate over an unknown length Retvals')
@@ -29,16 +29,16 @@ class Retvals:
     else:
       yield Retvals(self._taskOrGroup, self._key)
 
-  def ret(self):
+  def ret(self) -> T:
     if isinstance(self._key, list | tuple):
       ret = self._taskOrGroup.ret()
       return [ret[i] for i in self._key]
     return self._taskOrGroup.ret()[self._key]
 
-  def finished(self):
+  def finished(self) -> bool:
     return self._taskOrGroup.finished()
 
-class ParallelTask(Generic[T]):
+class ParallelTask(Sequence[T]):
   def __init__(self, worker: 'ParallelWorker', fun, args, kwargs):
     self._worker = worker
     self._fun = fun
@@ -49,7 +49,7 @@ class ParallelTask(Generic[T]):
     self._id = random.getrandbits(64)
     self._finished = False
 
-  def __getitem__(self, key):
+  def __getitem__(self, key) -> T:
     return Retvals(self, key)
 
   def __repr__(self):
@@ -175,7 +175,7 @@ def worker_controller(_stop: multiprocessing.Event, _in: multiprocessing.Queue, 
     #finally:
     _out.put((task._id, ret, exc))
 
-class ParallelWorker(Generic[T]):
+class ParallelWorker:
   def __init__(self, workers: int = 16):
     self._workers = workers
     self._tasks: List[ParallelTask] = []
