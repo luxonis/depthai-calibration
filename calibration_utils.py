@@ -371,39 +371,34 @@ def find_stereo_common_features(calibration, left_cam_info, right_cam_info):
   obj_pts = []
   one_pts = calibration._board.chessboardCorners
 
-  for i in range(len(allIds_l)):
+  for i, ids in enumerate(allIds_l):
     left_sub_corners = []
     right_sub_corners = []
     obj_pts_sub = []
-    #if len(allIds_l[i]) < 70 or len(allIds_r[i]) < 70:
-    #    continue
-    for j in range(len(allIds_l[i])):
-      idx = np.where(allIds_r[i] == allIds_l[i][j])
+
+    for j, id in enumerate(ids):
+      idx = np.where(allIds_r[i] == id)
       if idx[0].size == 0:
         continue
       left_sub_corners.append(allCorners_l[i][j]) # TODO : This copies even idxs that don't match
       right_sub_corners.append(allCorners_r[i][idx])
-      obj_pts_sub.append(one_pts[allIds_l[i][j]])
+      obj_pts_sub.append(one_pts[id])
     if len(left_sub_corners) > 3 and len(right_sub_corners) > 3:
       obj_pts.append(np.array(obj_pts_sub, dtype=np.float32))
       left_corners_sampled.append(
         np.array(left_sub_corners, dtype=np.float32))
-      left_ids_sampled.append(np.array(allIds_l[i], dtype=np.int32))
+      left_ids_sampled.append(np.array(ids, dtype=np.int32))
       right_corners_sampled.append(
         np.array(right_sub_corners, dtype=np.float32))
     else:
       return -1, "Stereo Calib failed due to less common features"
   return left_corners_sampled, right_corners_sampled, obj_pts
 
-def undistort_points_perspective(corners, camInfo):
-  for i in range(len(corners)):
-    corners[i] = cv2.undistortPoints(np.array(corners[i]), camInfo['intrinsics'], camInfo['dist_coeff'], P=camInfo['intrinsics'])
-  return corners
+def undistort_points_perspective(allCorners, camInfo):
+  return [cv2.undistortPoints(np.array(corners), camInfo['intrinsics'], camInfo['dist_coeff'], P=camInfo['intrinsics']) for corners in allCorners]
 
-def undistort_points_fisheye(corners, camInfo):
-  for i in range(len(corners)):
-    corners[i] = cv2.fisheye.undistortPoints(np.array(corners[i]), camInfo['intrinsics'], camInfo['dist_coeff'], P=camInfo['intrinsics'])
-  return corners
+def undistort_points_fisheye(allCorners, camInfo):
+  return [cv2.fisheye.undistortPoints(np.array(corners), camInfo['intrinsics'], camInfo['dist_coeff'], P=camInfo['intrinsics']) for corners in allCorners]
 
 def remove_and_filter_stereo_features(calibration, left_cam_info, right_cam_info):
   if left_cam_info["name"] in calibration.extrinsic_img or right_cam_info["name"] in calibration.extrinsic_img:
