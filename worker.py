@@ -12,7 +12,7 @@ def allArgs(args, kwargs):
   for kwarg in kwargs.values():
     yield kwarg
 
-class Retvals(Sequence[T]):
+class Retvals(Generic[T]):
   def __init__(self, taskOrGroup: 'ParallelTask', key: slice | tuple | int):
     self._taskOrGroup = taskOrGroup
     self._key = key
@@ -38,7 +38,7 @@ class Retvals(Sequence[T]):
   def finished(self) -> bool:
     return self._taskOrGroup.finished()
 
-class ParallelTask(Sequence[T]):
+class ParallelTask(Generic[T]):
   def __init__(self, worker: 'ParallelWorker', fun, args, kwargs):
     self._worker = worker
     self._fun = fun
