@@ -29,6 +29,9 @@ class Retvals(Generic[T]):
     else:
       yield Retvals(self._taskOrGroup, self._key)
 
+  def __repr__(self):
+    return f'<Retvals of {self._taskOrGroup}>'
+
   def ret(self) -> T:
     if isinstance(self._key, list | tuple):
       ret = self._taskOrGroup.ret()
@@ -96,6 +99,9 @@ class ParallelTaskGroup(Generic[T]):
   def __getitem__(self, key):
     return Retvals(self, key)
 
+  def __repr__(self):
+    return f'<TaskGroup {self._fun}>'
+
   def finished(self) -> bool:
     for task in self._tasks:
       if not task.finished():
@@ -108,10 +114,10 @@ class ParallelTaskGroup(Generic[T]):
   def tasks(self) -> List[ParallelTask]:
     nTasks = 1
     for arg in allArgs(self._args, self._kwargs):
-      if isinstance(arg, abc.Sized):
+      if isinstance(arg, ParallelTask | Retvals):
+        arg = arg.ret()
+      if isinstance(arg, abc.Sized) and not isinstance(arg, str | bytes | dict):
         nTasks = max(nTasks, len(arg))
-      elif isinstance(arg, ParallelTask | Retvals):
-        nTasks = max(nTasks, len(arg.ret()))
     self._tasks = []
     for arg in allArgs(self._args, self._kwargs):
       if isinstance(arg, abc.Sized) and len(arg) != nTasks:
