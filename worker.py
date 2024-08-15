@@ -95,6 +95,7 @@ class ParallelTaskGroup(Generic[T]):
     self._fun = fun
     self._args = args
     self._kwargs = kwargs
+    self._tasks = None
 
   def __getitem__(self, key):
     return Retvals(self, key)
@@ -103,6 +104,8 @@ class ParallelTaskGroup(Generic[T]):
     return f'<TaskGroup {self._fun}>'
 
   def finished(self) -> bool:
+    if not self._tasks:
+      return False
     for task in self._tasks:
       if not task.finished():
         return False
