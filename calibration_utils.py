@@ -7,6 +7,7 @@ from .worker import ParallelWorker
 import matplotlib.pyplot as plt
 import cv2.aruco as aruco
 from pathlib import Path
+from enum import Enum
 import numpy as np
 import time
 import cv2
@@ -17,15 +18,41 @@ plt.rcParams.update({'font.size': 16})
 PER_CCM = True
 EXTRINSICS_PER_CCM = False
 
-class ProxyDict:
+class StrEnum(Enum): # Doesn't exist in python 3.10
+  def __eq__(self, other):
+    if isinstance(other, str):
+      print('compare string')
+      return self.value == other
+    return super().__eq__(other)
+
+class CalibrationModel(StrEnum):
+  Perspective = 'perspective'
+  Fisheye = 'fisheye'
+
+class DistortionModel(StrEnum):
+  Normal = 'NORMAL'
+  Tilted = 'TILTED'
+  Prism = 'PRISM'
+  Thermal = 'THERMAL' # TODO : Is this even a distortion model
+
+class CharucoBoard:
   def __init__(self, squaresX = 16, squaresY = 9, squareSize = 1.0, markerSize = 0.8, dictSize = cv2.aruco.DICT_4X4_1000):
+    """Charuco board configuration used in a captured dataset
+
+    Args:
+        squaresX (int, optional): Number of squares horizontally. Defaults to 16.
+        squaresY (int, optional): Number of squares vertically. Defaults to 9.
+        squareSize (float, optional): Length of the side of one square (cm). Defaults to 1.0.
+        markerSize (float, optional): Length of the side of one marker (cm). Defaults to 0.8.
+        dictSize (_type_, optional): cv2 aruco dictionary size. Defaults to cv2.aruco.DICT_4X4_1000.
+    """
     self.squaresX = squaresX
     self.squaresY = squaresY
     self.squareSize = squareSize
     self.markerSize = markerSize
     self.dictSize = dictSize
 
-  def __getstate__(self):
+  def __getstate__(self): # Magic to allow pickling the instance without pickling the cv2 dictionary
     state = self.__dict__.copy()
     for hidden in ['_board', '_dictionary']:
       if hidden in state:
@@ -38,17 +65,17 @@ class ProxyDict:
 
   @property
   def dictionary(self):
+    """cv2 aruco dictionary"""
     if not hasattr(self, '_dictionary'):
       self.__build()
     return self._dictionary
 
   @property
   def board(self):
+    """cv2 aruco board"""
     if not hasattr(self, '_board'):
       self.__build()
     return self._board
-
-CharucoBoard = ProxyDict # TODO : Rename the class
 
 class Dataset:
   class Images:
@@ -92,11 +119,23 @@ class Dataset:
     self.board = board
 
 class CalibrationConfig:
-  def __init__(self, enableFiltering = True, ccmModel = '', disableCameras = [], initialMaxThreshold = 0, initialMinFiltered = 0, calibrationMaxThreshold = 0, calibrationMinFiltered = 0,
+  def __init__(self, enableFiltering = True, ccmModel = '', initialMaxThreshold = 0, initialMinFiltered = 0, calibrationMaxThreshold = 0, calibrationMinFiltered = 0,
                cameraModel = 0, stereoCalibCriteria = 0, features = None):
+    """Calibration configuration options
+
+    Args:
+        enableFiltering (bool, optional): Whether corners should be filtered for outliers. Defaults to True.
+        ccmModel (str, optional): _description_. Defaults to ''.
+        initialMaxThreshold (int, optional): _description_. Defaults to 0.
+        initialMinFiltered (int, optional): _description_. Defaults to 0.
+        calibrationMaxThreshold (int, optional): _description_. Defaults to 0.
+        calibrationMinFiltered (int, optional): _description_. Defaults to 0.
+        cameraModel (int, optional): _description_. Defaults to 0.
+        stereoCalibCriteria (int, optional): _description_. Defaults to 0.
+        features (_type_, optional): _description_. Defaults to None.
+    """
     self.enableFiltering = enableFiltering
     self.ccmModel = ccmModel # Distortion model
-    self.disableCameras = disableCameras
     self.initialMaxThreshold = initialMaxThreshold
     self.initialMinFiltered = initialMinFiltered
     self.calibrationMaxThreshold = calibrationMaxThreshold
@@ -106,9 +145,9 @@ class CalibrationConfig:
     self.features = features # None | 'checker_board' | 'charuco'
 
 class CameraData(TypedDict):
-  calib_model: str
+  calib_model: CalibrationModel
   dist_coeff: str
-  distortion_model: str
+  distortion_model: DistortionModel
   extrinsics: str
   to_cam: str
   filtered_corners: str
@@ -232,7 +271,7 @@ def estimate_pose_and_filter(camData: CameraData, allCorners, allIds, charucoBoa
 
   return filtered_corners, filtered_ids
 
-def calibrate_charuco(camData: CameraData, corners, ids, dataset: Dataset):
+def calibrate_charuco(camData: CameraData, allCorners, allIds, dataset: Dataset):
   # TODO : If we still need this check it needs to be elsewhere
   # if sum([len(corners) < 4 for corners in filteredCorners]) > 0.15 * len(filteredCorners):
   #   raise RuntimeError(f"More than 1/4 of images has less than 4 corners for {cam_info['name']}")
@@ -245,8 +284,8 @@ def calibrate_charuco(camData: CameraData, corners, ids, dataset: Dataset):
        rotation_vectors, translation_vectors,
        stdDeviationsIntrinsics, stdDeviationsExtrinsics,
        perViewErrors) = cv2.aruco.calibrateCameraCharucoExtended(
-        charucoCorners=corners,
-        charucoIds=ids,
+        charucoCorners=allCorners,
+        charucoIds=allIds,
         board=dataset.board.board,
         imageSize=camData['imsize'],
         cameraMatrix=camData['intrinsics'],
@@ -258,34 +297,34 @@ def calibrate_charuco(camData: CameraData, corners, ids, dataset: Dataset):
 
   camData['intrinsics'] = camera_matrix
   camData['dist_coeff'] = distortion_coefficients
-  camData['filtered_corners'] = corners
-  camData['filtered_ids'] = ids
+  camData['filtered_corners'] = allCorners
+  camData['filtered_ids'] = allIds
   return camData
 
-def filter_features_fisheye(cam_info, intrinsic_img, all_features, all_ids):
-  f = cam_info['imsize'][0] / (2 * np.tan(np.deg2rad(cam_info["hfov"]/2)))
+def filter_features_fisheye(camData: CameraData, intrinsic_img, all_features, all_ids):
+  f = camData['imsize'][0] / (2 * np.tan(np.deg2rad(camData["hfov"]/2)))
   print("INTRINSIC CALIBRATION")
-  cameraIntrinsics = np.array([[f,  0.0,    cam_info['imsize'][0]/2],
-                 [0.0,   f,    cam_info['imsize'][1]/2],
+  cameraIntrinsics = np.array([[f,  0.0,    camData['imsize'][0]/2],
+                 [0.0,   f,    camData['imsize'][1]/2],
                  [0.0,   0.0,    1.0]])
 
   distCoeff = np.zeros((12, 1))
 
-  if cam_info["name"] in intrinsic_img:
+  if camData["name"] in intrinsic_img:
     raise RuntimeError('This is broken')
-    all_features, all_ids, filtered_images = remove_features(filtered_features, filtered_ids, intrinsic_img[cam_info["name"]], image_files)
+    all_features, all_ids, filtered_images = remove_features(filtered_features, filtered_ids, intrinsic_img[camData["name"]], image_files)
   else:
-    filtered_images = cam_info['images_path']
+    filtered_images = camData['images_path']
 
   filtered_features = all_features
   filtered_ids = all_ids
 
-  cam_info['filtered_ids'] = filtered_ids
-  cam_info['filtered_corners'] = filtered_features
-  cam_info['intrinsics'] = cameraIntrinsics
-  cam_info['dist_coeff'] = distCoeff
+  camData['filtered_ids'] = filtered_ids
+  camData['filtered_corners'] = filtered_features
+  camData['intrinsics'] = cameraIntrinsics
+  camData['dist_coeff'] = distCoeff
 
-  return cam_info
+  return camData
 
 def calibrate_ccm_intrinsics_per_ccm(config: CalibrationConfig, camData: CameraData, dataset: Dataset):
   start = time.time()
@@ -345,10 +384,10 @@ def calibrate_ccm_intrinsics(config: CalibrationConfig, camData: CameraData):
 
   return camData
 
-def calibrate_stereo_perspective(config: CalibrationConfig, obj_pts, left_corners_sampled, right_corners_sampled, left_cam_info, right_cam_info):
-  cameraMatrix_l, distCoeff_l, cameraMatrix_r, distCoeff_r, left_distortion_model = left_cam_info['intrinsics'], left_cam_info['dist_coeff'], right_cam_info['intrinsics'], right_cam_info['dist_coeff'], left_cam_info['distortion_model']
-  specTranslation = left_cam_info['extrinsics']['specTranslation']
-  rot = left_cam_info['extrinsics']['rotation']
+def calibrate_stereo_perspective(config: CalibrationConfig, obj_pts, allLeftCorners, allRightCorners, leftCamData: CameraData, rightCamData: CameraData):
+  cameraMatrix_l, distCoeff_l, cameraMatrix_r, distCoeff_r, left_distortion_model = leftCamData['intrinsics'], leftCamData['dist_coeff'], rightCamData['intrinsics'], rightCamData['dist_coeff'], leftCamData['distortion_model']
+  specTranslation = leftCamData['extrinsics']['specTranslation']
+  rot = leftCamData['extrinsics']['rotation']
 
   t_in = np.array(
     [specTranslation['x'], specTranslation['y'], specTranslation['z']], dtype=np.float32)
@@ -363,7 +402,7 @@ def calibrate_stereo_perspective(config: CalibrationConfig, obj_pts, left_corner
   flags += distortion_flags
   # print(flags)
   ret, M1, d1, M2, d2, R, T, E, F, _ = cv2.stereoCalibrateExtended(
-  obj_pts, left_corners_sampled, right_corners_sampled,
+  obj_pts, allLeftCorners, allRightCorners,
   cameraMatrix_l, distCoeff_l, cameraMatrix_r, distCoeff_r, None,
   R=r_in, T=t_in, criteria=config.stereoCalibCriteria, flags=flags)
 
@@ -526,86 +565,76 @@ def calculate_epipolar_error(left_cam_info, right_cam_info, left_cam, right_cam,
     scale = ((left_cam_info['intrinsics'][0][0]*right_cam_info['intrinsics'][0][0] + left_cam_info['intrinsics'][1][1]*right_cam_info['intrinsics'][1][1])/2)
     print(f"Epipolar error {extrinsics[0]*np.sqrt(scale)}")
     left_cam_info['extrinsics']['epipolar_error'] = extrinsics[0]*np.sqrt(scale)
-    left_cam_info['extrinsics']['stereo_error'] = extrinsics[0]*np.sqrt(scale) # TODO :Remove one of these
   else:
     print(f"Epipolar error {extrinsics[0]}")
     left_cam_info['extrinsics']['epipolar_error'] = extrinsics[0]
-    left_cam_info['extrinsics']['stereo_error'] = extrinsics[0] # TODO : Remove one of these
 
   left_cam_info['extrinsics']['rotation_matrix'] = extrinsics[1]
   left_cam_info['extrinsics']['translation'] = extrinsics[2]
 
   return left_cam_info, stereoConfig
 
-def get_distortion_flags(distortionModel):
-  def is_binary_string(s: str) -> bool:
-  # Check if all characters in the string are '0' or '1'
-    return all(char in '01' for char in s)
+def get_distortion_flags(distortionModel: DistortionModel):
   if distortionModel == None:
     print("Use DEFAULT model")
     flags = cv2.CALIB_RATIONAL_MODEL
-  elif is_binary_string(distortionModel):
+
+  elif all(char in '01' for char in distortionModel):
     flags = cv2.CALIB_RATIONAL_MODEL
     flags += cv2.CALIB_TILTED_MODEL
     flags += cv2.CALIB_THIN_PRISM_MODEL
-    binary_number = int(distortionModel, 2)
-    # Print the results
-    if binary_number == 0:
-      clauses_status = [True, True,True, True, True, True, True, True, True]
-    else:
-      clauses_status = [(binary_number & (1 << i)) != 0 for i in range(len(distortionModel))]
-      clauses_status = clauses_status[::-1]
-    if clauses_status[0]:
+    distFlags = int(distortionModel, 2)
+
+    if distFlags & (1 << 0):
       print("FIX_K1")
       flags += cv2.CALIB_FIX_K1
-    if clauses_status[1]:
+    if distFlags & (1 << 1):
       print("FIX_K2")
       flags += cv2.CALIB_FIX_K2
-    if clauses_status[2]:
+    if distFlags & (1 << 2):
       print("FIX_K3")
       flags += cv2.CALIB_FIX_K3
-    if clauses_status[3]:
+    if distFlags & (1 << 3):
       print("FIX_K4")
       flags += cv2.CALIB_FIX_K4
-    if clauses_status[4]:
+    if distFlags & (1 << 4):
       print("FIX_K5")
       flags += cv2.CALIB_FIX_K5
-    if clauses_status[5]:
+    if distFlags & (1 << 5):
       print("FIX_K6")
       flags += cv2.CALIB_FIX_K6
-    if clauses_status[6]:
+    if distFlags & (1 << 6):
       print("FIX_TANGENT_DISTORTION")
       flags += cv2.CALIB_ZERO_TANGENT_DIST
-    if clauses_status[7]:
+    if distFlags & (1 << 7):
       print("FIX_TILTED_DISTORTION")
       flags += cv2.CALIB_FIX_TAUX_TAUY
-    if clauses_status[8]:
+    if distFlags & (1 << 8):
       print("FIX_PRISM_DISTORTION")
       flags += cv2.CALIB_FIX_S1_S2_S3_S4
 
-  elif isinstance(distortionModel, str):
-    if distortionModel == "NORMAL":
-      print("Using NORMAL model")
-      flags = cv2.CALIB_RATIONAL_MODEL
-      flags += cv2.CALIB_TILTED_MODEL
+  elif distortionModel == DistortionModel.Normal:
+    print("Using NORMAL model")
+    flags = cv2.CALIB_RATIONAL_MODEL
+    flags += cv2.CALIB_TILTED_MODEL
 
-    elif distortionModel == "TILTED":
-      print("Using TILTED model")
-      flags = cv2.CALIB_RATIONAL_MODEL
-      flags += cv2.CALIB_TILTED_MODEL
+  elif distortionModel == DistortionModel.Tilted:
+    print("Using TILTED model")
+    flags = cv2.CALIB_RATIONAL_MODEL
+    flags += cv2.CALIB_TILTED_MODEL
 
-    elif distortionModel == "PRISM":
-      print("Using PRISM model")
-      flags = cv2.CALIB_RATIONAL_MODEL
-      flags += cv2.CALIB_TILTED_MODEL
-      flags += cv2.CALIB_THIN_PRISM_MODEL
+  elif distortionModel == DistortionModel.Prism:
+    print("Using PRISM model")
+    flags = cv2.CALIB_RATIONAL_MODEL
+    flags += cv2.CALIB_TILTED_MODEL
+    flags += cv2.CALIB_THIN_PRISM_MODEL
 
-    elif distortionModel == "THERMAL":
-      print("Using THERMAL model")
-      flags = cv2.CALIB_RATIONAL_MODEL
-      flags += cv2.CALIB_FIX_K3
-      flags += cv2.CALIB_FIX_K5
-      flags += cv2.CALIB_FIX_K6
+  elif distortionModel == DistortionModel.Thermal:
+    print("Using THERMAL model")
+    flags = cv2.CALIB_RATIONAL_MODEL
+    flags += cv2.CALIB_FIX_K3
+    flags += cv2.CALIB_FIX_K5
+    flags += cv2.CALIB_FIX_K6
 
   elif isinstance(distortionModel, int):
     print("Using CUSTOM flags")
@@ -1037,26 +1066,16 @@ def proxy_estimate_pose_and_filter_single(camData, corners, ids, dataset):
 class StereoCalibration(object):
   """Class to Calculate Calibration and Rectify a Stereo Camera."""
 
-  def __init__(self, traceLevel: float = 1.0, outputScaleFactor: float = 0.5, disableCamera: list = [], model = None,distortion_model = {}, filtering_enable = False, initial_max_threshold = 15, initial_min_filtered = 0.05, calibration_max_threshold = 10):
+  def __init__(self, traceLevel: float = 1.0, outputScaleFactor: float = 0.5, model = None,distortion_model = {}, filtering_enable = False, initial_max_threshold = 15, initial_min_filtered = 0.05, calibration_max_threshold = 10):
     self.filtering_enable = filtering_enable
     self.ccm_model = distortion_model
-    self.model = model
     self.output_scale_factor = outputScaleFactor
-    self.disableCamera = disableCamera
     self.initial_max_threshold = initial_max_threshold
     self.initial_min_filtered = initial_min_filtered
     self.calibration_max_threshold = calibration_max_threshold
     self.calibration_min_filtered = initial_min_filtered
 
     """Class to Calculate Calibration and Rectify a Stereo Camera."""
-
-  @property
-  def _aruco_dictionary(self):
-    return self._proxyDict.dictionary
-
-  @property
-  def _board(self):
-    return self._proxyDict.board
 
   def calibrate(self, board_config, filepath, camera_model, intrinsics: List[Dataset] = [], extrinsics: List[Tuple[Dataset, Dataset]] = []):
     """Function to calculate calibration for stereo camera."""
@@ -1074,7 +1093,7 @@ class StereoCalibration(object):
 
     
     config = CalibrationConfig(
-      self.filtering_enable, self.ccm_model, self.disableCamera, self.initial_max_threshold, self.initial_min_filtered, self.calibration_max_threshold, self.calibration_min_filtered,
+      self.filtering_enable, self.ccm_model, self.initial_max_threshold, self.initial_min_filtered, self.calibration_max_threshold, self.calibration_min_filtered,
       camera_model, (cv2.TERM_CRITERIA_COUNT + cv2.TERM_CRITERIA_EPS, 300, 1e-9), None
     )
 
@@ -1097,7 +1116,7 @@ class StereoCalibration(object):
         if camData["name"] in self.ccm_model:
           distortion_model = self.ccm_model[camData["name"]]
         else:
-          distortion_model = self.model
+          distortion_model = DistortionModel.Tilted # Use the tilted model by default
 
       camData['imsize'] = dataset.imageSize
       camData['calib_model'] = calib_model
