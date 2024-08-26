@@ -576,7 +576,7 @@ def get_distortion_flags(distortionModel: DistortionModel):
     print("Use DEFAULT model")
     flags = cv2.CALIB_RATIONAL_MODEL
 
-  elif all(char in '01' for char in distortionModel):
+  elif all(char in '01' for char in str(distortionModel)):
     flags = cv2.CALIB_RATIONAL_MODEL
     flags += cv2.CALIB_TILTED_MODEL
     flags += cv2.CALIB_THIN_PRISM_MODEL
