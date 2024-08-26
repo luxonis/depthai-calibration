@@ -120,7 +120,7 @@ class Dataset:
 
 class CalibrationConfig:
   def __init__(self, enableFiltering = True, ccmModel = '', initialMaxThreshold = 0, initialMinFiltered = 0, calibrationMaxThreshold = 0, calibrationMinFiltered = 0,
-               cameraModel = 0, stereoCalibCriteria = 0, features = None):
+               cameraModel = 0, stereoCalibCriteria = 0):
     """Calibration configuration options
 
     Args:
@@ -132,7 +132,6 @@ class CalibrationConfig:
         calibrationMinFiltered (int, optional): _description_. Defaults to 0.
         cameraModel (int, optional): _description_. Defaults to 0.
         stereoCalibCriteria (int, optional): _description_. Defaults to 0.
-        features (_type_, optional): _description_. Defaults to None.
     """
     self.enableFiltering = enableFiltering
     self.ccmModel = ccmModel # Distortion model
@@ -142,7 +141,6 @@ class CalibrationConfig:
     self.calibrationMinFiltered = calibrationMinFiltered
     self.cameraModel = cameraModel
     self.stereoCalibCriteria = stereoCalibCriteria
-    self.features = features # None | 'checker_board' | 'charuco'
 
 class CameraData(TypedDict):
   calib_model: CalibrationModel
@@ -169,7 +167,6 @@ class CameraData(TypedDict):
   reprojection_error: str
   size: str
   threshold_stepper: str
-  features: str
   ids: str
 
 colors = [(0, 255 , 0), (0, 0, 255)]
@@ -656,25 +653,20 @@ def calibrate_wf_intrinsics(config: CalibrationConfig, camData: CameraData, data
   coverageImage = cv2.cvtColor(coverageImage, cv2.COLOR_GRAY2BGR)
   coverageImage = draw_corners(allCorners, coverageImage)
   if calib_model == 'perspective':
-    if config.features == None or config.features == "charucos":
-      distortion_flags = get_distortion_flags(distortionModel)
-      ret, cameraIntrinsics, distCoeff, rotation_vectors, translation_vectors, filtered_ids, filtered_corners, allCorners, allIds  = calibrate_camera_charuco(
-        config, allCorners, allIds, imsize, hfov, distortion_flags, cameraIntrinsics, distCoeff, dataset)
+    distortion_flags = get_distortion_flags(distortionModel)
+    ret, cameraIntrinsics, distCoeff, rotation_vectors, translation_vectors, filtered_ids, filtered_corners, allCorners, allIds  = calibrate_camera_charuco(
+      config, allCorners, allIds, imsize, hfov, distortion_flags, cameraIntrinsics, distCoeff, dataset)
 
-      return ret, cameraIntrinsics, distCoeff, rotation_vectors, translation_vectors, filtered_ids, filtered_corners, imsize, coverageImage, allCorners, allIds
-    else:
-      return ret, cameraIntrinsics, distCoeff, rotation_vectors, translation_vectors, filtered_ids, filtered_corners, imsize, coverageImage, allCorners, allIds
-    #### ADD ADDITIONAL FEATURES CALIBRATION ####
+    return ret, cameraIntrinsics, distCoeff, rotation_vectors, translation_vectors, filtered_ids, filtered_corners, imsize, coverageImage, allCorners, allIds
   else:
-    if config.features == None or config.features == "charucos":
-      print('Fisheye--------------------------------------------------')
-      ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, filtered_ids, filtered_corners = calibrate_fisheye(
-        config, allCorners, allIds, imsize, hfov, name)
-      print('Fisheye rotation vector', rotation_vectors[0])
-      print('Fisheye translation vector', translation_vectors[0])
+    print('Fisheye--------------------------------------------------')
+    ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, filtered_ids, filtered_corners = calibrate_fisheye(
+      config, allCorners, allIds, imsize, hfov, name)
+    print('Fisheye rotation vector', rotation_vectors[0])
+    print('Fisheye translation vector', translation_vectors[0])
 
-      # (Height, width)
-      return ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, filtered_ids, filtered_corners, imsize, coverageImage, allCorners, allIds
+    # (Height, width)
+    return ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, filtered_ids, filtered_corners, imsize, coverageImage, allCorners, allIds
 
 def draw_corners(charuco_corners, displayframe):
   for corners in charuco_corners:
@@ -1079,7 +1071,6 @@ class StereoCalibration(object):
 
   def calibrate(self, board_config, filepath, camera_model, intrinsics: List[Dataset] = [], extrinsics: List[Tuple[Dataset, Dataset]] = []):
     """Function to calculate calibration for stereo camera."""
-    start_time = time.time()
     # init object data
     self._cameraModel = camera_model
     self._data_path = filepath
@@ -1087,9 +1078,6 @@ class StereoCalibration(object):
                    cv2.TERM_CRITERIA_EPS, 300, 1e-9)
 
     self.cams = []
-    features = None
-
-    resizeWidth, resizeHeight = 1280, 800
 
     
     config = CalibrationConfig(
@@ -1153,9 +1141,7 @@ class StereoCalibration(object):
           left_corners_sampled = pw.run(undistort_points_fisheye, left_corners_sampled, left_cam_info)
           right_corners_sampled = pw.run(undistort_points_fisheye, right_corners_sampled, right_cam_info)
 
-        if features == None or features == "charucos":
-          extrinsics = pw.run(calibrate_stereo_perspective_per_ccm, config, obj_pts, left_corners_sampled, right_corners_sampled, left_cam_info, right_cam_info)
-        #### ADD OTHER CALIBRATION METHODS ###
+        extrinsics = pw.run(calibrate_stereo_perspective_per_ccm, config, obj_pts, left_corners_sampled, right_corners_sampled, left_cam_info, right_cam_info)
       else:
         if self._cameraModel == 'perspective':
           extrinsics = pw.run(calibrate_stereo_perspective, config, obj_pts, left_corners_sampled, right_corners_sampled, left_cam_info, right_cam_info)
