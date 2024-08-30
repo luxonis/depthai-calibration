@@ -198,6 +198,10 @@ def estimate_pose_and_filter_single(camData: CameraData, corners, ids, charucoBo
     if ini_threshold > camData['max_threshold']:
       break
     ret, rvec, tvec, objects  = cv2.solvePnPRansac(objpoints, corners, camData['intrinsics'], camData['dist_coeff'], flags = cv2.SOLVEPNP_P3P, reprojectionError = ini_threshold,  iterationsCount = 10000, confidence = 0.9)
+
+    if not ret:
+      raise RuntimeError('Exception') # TODO : Handle
+
     all_objects.append(objects)
     imgpoints2 = objpoints.copy()
 
@@ -208,8 +212,6 @@ def estimate_pose_and_filter_single(camData: CameraData, corners, ids, charucoBo
     ret, rvec, tvec = cv2.solvePnP(imgpoints2, all_corners2, camData['intrinsics'], camData['dist_coeff'])
 
     ini_threshold += camData['threshold_stepper']
-  if not ret:
-    raise RuntimeError('Exception') # TODO : Handle
 
   if ids is not None and corners.size > 0: # TODO : Try to remove the np reshaping
     ids = ids.flatten()  # Flatten the IDs from 2D to 1D
@@ -233,7 +235,7 @@ def estimate_pose_and_filter_single(camData: CameraData, corners, ids, charucoBo
     #removed_corners.extend(corners2[removed_mask])
     return corners2[valid_mask].reshape(-1, 1, 2), valid_ids.reshape(-1, 1).astype(np.int32), corners2[removed_mask]
 
-def get_features(config: CalibrationConfig, camData: CameraData, dataset: Dataset) -> Tuple[CameraData, list, list]:
+def get_features(config: CalibrationConfig, camData: CameraData) -> CameraData:
   f = camData['size'][0] / (2 * np.tan(np.deg2rad(camData["hfov"]/2)))
 
   camData['intrinsics'] = np.array([
@@ -253,7 +255,7 @@ def get_features(config: CalibrationConfig, camData: CameraData, dataset: Datase
   camData['threshold_stepper'] = threshold_stepper
   camData['min_inliers'] = min_inliers
 
-  return camData, dataset.allCorners, dataset.allIds
+  return camData
 
 def estimate_pose_and_filter(camData: CameraData, allCorners, allIds, charucoBoard):
   filtered_corners = []
@@ -272,14 +274,27 @@ def calibrate_charuco(camData: CameraData, allCorners, allIds, dataset: Dataset)
 
   distortion_flags = get_distortion_flags(camData['distortion_model'])
   flags = cv2.CALIB_USE_INTRINSIC_GUESS + distortion_flags
+  
+  # Convert to int32 from uint32 # TODO : Shouldn't be necessary
+  for i, ids in enumerate(allIds): allIds[i] = ids.reshape(-1, 1).astype(np.int32)
+  
+  # Filter for only images with >6 corners # TODO : Shouldn't be in here, should be in a separate necessary filtering function
+  allCorners2 = []
+  allIds2 = []
+  
+  for corners, ids in zip(allCorners, allIds):
+    if len(ids) < 6:
+      continue
+    allCorners2.append(corners)
+    allIds2.append(ids)
 
   #try:
   (ret, camera_matrix, distortion_coefficients,
        rotation_vectors, translation_vectors,
        stdDeviationsIntrinsics, stdDeviationsExtrinsics,
        perViewErrors) = cv2.aruco.calibrateCameraCharucoExtended(
-        charucoCorners=allCorners,
-        charucoIds=allIds,
+        charucoCorners=allCorners2,
+        charucoIds=allIds2,
         board=dataset.board.board,
         imageSize=camData['size'],
         cameraMatrix=camData['intrinsics'],
@@ -291,8 +306,8 @@ def calibrate_charuco(camData: CameraData, allCorners, allIds, dataset: Dataset)
 
   camData['intrinsics'] = camera_matrix
   camData['dist_coeff'] = distortion_coefficients
-  camData['filtered_corners'] = allCorners
-  camData['filtered_ids'] = allIds
+  camData['filtered_corners'] = allCorners2
+  camData['filtered_ids'] = allIds2
   return camData
 
 def filter_features_fisheye(camData: CameraData, intrinsic_img, all_features, all_ids):
@@ -502,6 +517,7 @@ def find_stereo_common_features(leftDataset: Dataset, rightDataset: Dataset):
   left_corners_sampled = []
   right_corners_sampled = []
   obj_pts = []
+  failed = 0
 
   for i, _ in enumerate(leftDataset.allIds): # For ids in all images
     commonIds = np.intersect1d(leftDataset.allIds[i], rightDataset.allIds[i])
@@ -509,12 +525,16 @@ def find_stereo_common_features(leftDataset: Dataset, rightDataset: Dataset):
     right_sub_corners = rightDataset.allCorners[i][np.isin(rightDataset.allIds[i], commonIds)]
     obj_pts_sub = leftDataset.board.board.chessboardCorners[commonIds]
 
-    if len(left_sub_corners) > 3 and len(right_sub_corners) > 3:
+    if len(commonIds) > 6:
       obj_pts.append(obj_pts_sub)
       left_corners_sampled.append(left_sub_corners)
       right_corners_sampled.append(right_sub_corners)
     else:
-      raise RuntimeError('Less than 3 common features found')
+      failed += 1
+
+  if failed > len(leftDataset.allIds) / 3:
+    raise RuntimeError('More than 1/3 of images had less than 6 common features found')
+
   return left_corners_sampled, right_corners_sampled, obj_pts
 
 def undistort_points_perspective(allCorners, camInfo):
@@ -1079,6 +1099,10 @@ class StereoCalibration(object):
       self.filtering_enable, self.ccm_model, self.initial_max_threshold, self.initial_min_filtered, self.calibration_max_threshold, self.calibration_min_filtered,
       camera_model, (cv2.TERM_CRITERIA_COUNT + cv2.TERM_CRITERIA_EPS, 300, 1e-9)
     )
+    
+    for a, b in extrinsics:
+      if len(a.allIds) != len(b.allIds):
+        raise RuntimeError('Not all dataset for extrinsic calibration have the same number of images') # TODO : This isn't thorough enough
 
     pw = ParallelWorker(1)
     camInfos = {}
@@ -1106,13 +1130,15 @@ class StereoCalibration(object):
       camData['distortion_model'] = distortion_model
 
       if PER_CCM:
-        camData, corners, ids = pw.run(get_features, config, camData, dataset)[:3]
+        camData = pw.run(get_features, config, camData)
         if self._cameraModel == "fisheye":
-          camData = pw.run(filter_features_fisheye, camData, corners, ids) # TODO : Input types are wrong
+          camData = pw.run(filter_features_fisheye, camData, dataset.allCorners, dataset.allIds) # TODO : Input types are wrong
         elif dataset.enableFiltering:
-          corners, ids = pw.map(proxy_estimate_pose_and_filter_single, camData, corners, ids, dataset)[:2]
+          corners, ids = pw.map(proxy_estimate_pose_and_filter_single, camData, dataset.allCorners, dataset.allIds, dataset)[:2]
+        else:
+          corners, ids = dataset.allCorners, dataset.allIds
 
-          camData = pw.run(calibrate_charuco, camData, corners, ids, dataset)
+        camData = pw.run(calibrate_charuco, camData, corners, ids, dataset)
         camData = pw.run(calibrate_ccm_intrinsics_per_ccm, config, camData, dataset)
         camInfos[dataset.name] = camData
       else:
@@ -1123,7 +1149,7 @@ class StereoCalibration(object):
       right_cam_info = camInfos[right.name]
 
       if PER_CCM and EXTRINSICS_PER_CCM:
-        # TODO : Shouldn't refilter if it's already been filtered in intrinsic calibration
+        # TODO : Shouldn't refilter if it's already been filtered in intrinsic calibration, or should at least use two calls to filter_single
         left_cam_info, right_cam_info = pw.run(remove_and_filter_stereo_features, left_cam_info, right_cam_info, left, right)[:2]
 
       left_corners_sampled, right_corners_sampled, obj_pts= pw.run(find_stereo_common_features, left, right)[:3]
