@@ -401,8 +401,8 @@ class StereoCalibration(object):
                                         array = self.extrinsic_img[left_cam_info["name"]]
                                     left_cam_info['filtered_corners'], left_cam_info['filtered_ids'], filtered_images = self.remove_features(left_cam_info['filtered_corners'], left_cam_info['filtered_ids'], array)
                                     right_cam_info['filtered_corners'], right_cam_info['filtered_ids'], filtered_images = self.remove_features(right_cam_info['filtered_corners'], right_cam_info['filtered_ids'], array)
-                                    removed_features, left_cam_info['filtered_corners'], left_cam_info['filtered_ids'] = self.filtering_features(left_cam_info['filtered_corners'], left_cam_info['filtered_ids'], left_cam_info["name"],left_cam_info["imsize"],left_cam_info["hfov"], self.cameraIntrinsics["name"], self.cameraDistortion["name"])
-                                    removed_features, right_cam_info['filtered_corners'], right_cam_info['filtered_ids'] = self.filtering_features(right_cam_info['filtered_corners'], right_cam_info['filtered_ids'], right_cam_info["name"], right_cam_info["imsize"], right_cam_info["hfov"], self.cameraIntrinsics["name"], self.cameraDistortion["name"])
+                                    removed_features, left_cam_info['filtered_corners'], left_cam_info['filtered_ids'] = self.filtering_features(left_cam_info['filtered_corners'], left_cam_info['filtered_ids'], left_cam_info["name"],left_cam_info["imsize"],left_cam_info["hfov"], left_cam_info['intrinsics'], left_cam_info['dist_coeff'])
+                                    removed_features, right_cam_info['filtered_corners'], right_cam_info['filtered_ids'] = self.filtering_features(right_cam_info['filtered_corners'], right_cam_info['filtered_ids'], right_cam_info["name"], right_cam_info["imsize"], right_cam_info["hfov"], right_cam_info['intrinsics'], right_cam_info['dist_coeff'])
                             
                             extrinsics = self.calibrate_stereo(left_cam_info['name'], right_cam_info['name'], left_cam_info['filtered_ids'], left_cam_info['filtered_corners'], right_cam_info['filtered_ids'], right_cam_info['filtered_corners'], left_cam_info['intrinsics'], left_cam_info[
                                                                    'dist_coeff'], right_cam_info['intrinsics'], right_cam_info['dist_coeff'], translation, rotation, features)
@@ -487,8 +487,6 @@ class StereoCalibration(object):
          # check if there are any suspicious corners with high reprojection error
         rvecs = []
         tvecs = []
-        index = 0
-        self.index = 0
         max_threshold = 75 + self.initial_max_threshold * (hfov / 30 + imsize[1] / 800 * 0.2)
         threshold_stepper = int(1.5 * (hfov / 30 + imsize[1] / 800))
         if threshold_stepper < 1:
@@ -499,6 +497,8 @@ class StereoCalibration(object):
         for index, corners in enumerate(allCorners):
             if len(corners) < 4:
                 return f"Less than 4 corners detected on {index} image.", None, None
+        index = 0
+        self.index = 0
         for corners, ids in zip(allCorners, allIds):
             current = time.time()
             self.index = index
@@ -1493,8 +1493,24 @@ class StereoCalibration(object):
         right_corners_sampled = []
         left_ids_sampled = []
         obj_pts = []
+        res = 0.0
         one_pts = self.board.chessboardCorners
-
+        rvecs = []
+        tvecs = []
+        for corners, ids in zip(allCorners_l, allIds_l):
+            objpts = self.charuco_ids_to_objpoints(ids)
+            rvec, tvec, newids = self.camera_pose_charuco(objpts, corners, ids, cameraMatrix_l, distCoeff_l)
+            tvecs.append(tvec)
+            rvecs.append(rvec)
+        allCorners_l, allIds_l, all_error, removed_corners, removed_ids, removed_error = self.features_filtering_function(rvecs, tvecs, cameraMatrix_l, distCoeff_l, res, allCorners_l, allIds_l, camera = left_name, threshold=1)
+        rvecs = []
+        tvecs = []
+        for corners, ids in zip(allCorners_r, allIds_r):
+            objpts = self.charuco_ids_to_objpoints(ids)
+            rvec, tvec, newids = self.camera_pose_charuco(objpts, corners, ids, cameraMatrix_r, distCoeff_r)
+            tvecs.append(tvec)
+            rvecs.append(rvec)
+        allCorners_r, allIds_r ,all_error, removed_corners, removed_ids, removed_error = self.features_filtering_function(rvecs, tvecs, cameraMatrix_r, distCoeff_r, res, allCorners_r, allIds_r, camera = right_name, threshold=1)
         if self.traceLevel == 2 or self.traceLevel == 4 or self.traceLevel == 10:
             print('Length of allIds_l')
             print(len(allIds_l))
