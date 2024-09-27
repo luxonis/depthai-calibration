@@ -513,29 +513,12 @@ def calibrate_stereo_fisheye(config: CalibrationConfig, obj_pts, left_corners_sa
 
   return [ret, R, T, R_l, R_r, P_l, P_r]
 
-def find_stereo_common_features(leftDataset: Dataset, rightDataset: Dataset, leftCamData: CameraData, rightCamData: CameraData):
+def find_stereo_common_features(leftDataset: Dataset, rightDataset: Dataset):
   left_corners_sampled = []
   right_corners_sampled = []
   obj_pts = []
   failed = 0
-  rvecs = []
-  tvecs = []
-  for corners, ids in zip(leftDataset.allCorners, leftDataset.allIds):
-    objpts = leftDataset.board.board.chessboardCorners[ids]
-    rvec, tvec = camera_pose_charuco(objpts, corners, ids, leftCamData['intrinsics'], leftCamData['dist_coeff'])
-    tvecs.append(tvec)
-    rvecs.append(rvec)
-  leftDataset.allCorners, leftDataset.allIds, all_error, removed_corners, removed_ids, removed_error = features_filtering_function(rvec, tvec, leftCamData['intrinsics'], leftCamData['dist_coeff'], leftDataset.allCorners, leftDataset.allIds, threshold = 2, dataset=leftDataset)
-  
-  rvecs = []
-  tvecs = []
-  for corners, ids in zip(rightDataset.allCorners, rightDataset.allIds):
-    objpts = rightDataset.board.board.chessboardCorners[ids]
-    rvec, tvec = camera_pose_charuco(objpts, corners, ids, rightCamData['intrinsics'], rightCamData['dist_coeff'])
-    tvecs.append(tvec)
-    rvecs.append(rvec)
-  rightDataset.allCorners, rightDataset.allIds, all_error, removed_corners, removed_ids, removed_error = features_filtering_function(rvec, tvec, rightCamData['intrinsics'], rightCamData['dist_coeff'], rightDataset.allCorners, rightDataset.allIds, threshold = 2, dataset=rightDataset)
-  
+
   for i, _ in enumerate(leftDataset.allIds): # For ids in all images
     commonIds = np.intersect1d(leftDataset.allIds[i], rightDataset.allIds[i])
     left_sub_corners = leftDataset.allCorners[i][np.isin(leftDataset.allIds[i], commonIds)]
@@ -1169,7 +1152,7 @@ class StereoCalibration(object):
         # TODO : Shouldn't refilter if it's already been filtered in intrinsic calibration, or should at least use two calls to filter_single
         left_cam_info, right_cam_info = pw.run(remove_and_filter_stereo_features, left_cam_info, right_cam_info, left, right)[:2]
 
-      left_corners_sampled, right_corners_sampled, obj_pts= pw.run(find_stereo_common_features, left, right, left_cam_info, right_cam_info)[:3]
+      left_corners_sampled, right_corners_sampled, obj_pts= pw.run(find_stereo_common_features, left, right)[:3]
 
       if PER_CCM and EXTRINSICS_PER_CCM:
         if left_cam_info['calib_model'] == "perspective":
