@@ -1164,7 +1164,7 @@ class StereoCalibration(object):
             img = cv2.imread(im)
             # h, w = img.shape[:2]
             if self.cameraModel == 'perspective':
-                kScaled, _ = cv2.getOptimalNewCameraMatrix(K, D, img_size, 0)
+                kScaled, _ = cv2.getOptimalNewCameraMatrix(K, D, img_size, 1)
                 # print(f'K scaled is \n {kScaled} and size is \n {img_size}')
                 # print(f'D Value is \n {D}')
                 map1, map2 = cv2.initUndistortRectifyMap(
@@ -1182,10 +1182,10 @@ class StereoCalibration(object):
             if self.traceLevel == 4 or self.traceLevel == 5 or self.traceLevel == 10:
                 cv2.putText(undistorted_img, "Press S to save image", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 2*undistorted_img.shape[0]/1750, (0, 0, 255), 2)
                 cv2.imshow("undistorted", undistorted_img)
-                k = cv2.waitKey(1)
+                k = cv2.waitKey(0)
                 if k == ord("s") or k == ord("S"):
-                    undistorted_img = cv2.remap(
-                        img, map1, map2, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
+                    #undistorted_img = cv2.remap(
+                    #    img, map1, map2, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
                     undistorted_file_path = self.data_path + '/' + name + f'_{index}_undistorted.png'
                     cv2.imwrite(undistorted_file_path, undistorted_img)
                 if k == 27:  # Esc key to stop
@@ -1505,7 +1505,7 @@ class StereoCalibration(object):
             rvec, tvec, newids = self.camera_pose_charuco(objpts, corners, ids, cameraMatrix_l, distCoeff_l)
             tvecs.append(tvec)
             rvecs.append(rvec)
-        allCorners_l, allIds_l, all_error, removed_corners, removed_ids, removed_error = self.features_filtering_function(rvecs, tvecs, cameraMatrix_l, distCoeff_l, res, allCorners_l, allIds_l, camera = left_name, threshold=1)
+        allCorners_l, allIds_l, all_error, removed_corners, removed_ids, removed_error = self.features_filtering_function(rvecs, tvecs, cameraMatrix_l, distCoeff_l, res, allCorners_l, allIds_l, camera = left_name, threshold=2.5)
         rvecs = []
         tvecs = []
         for corners, ids in zip(allCorners_r, allIds_r):
@@ -1513,7 +1513,7 @@ class StereoCalibration(object):
             rvec, tvec, newids = self.camera_pose_charuco(objpts, corners, ids, cameraMatrix_r, distCoeff_r)
             tvecs.append(tvec)
             rvecs.append(rvec)
-        allCorners_r, allIds_r ,all_error, removed_corners, removed_ids, removed_error = self.features_filtering_function(rvecs, tvecs, cameraMatrix_r, distCoeff_r, res, allCorners_r, allIds_r, camera = right_name, threshold=1)
+        allCorners_r, allIds_r ,all_error, removed_corners, removed_ids, removed_error = self.features_filtering_function(rvecs, tvecs, cameraMatrix_r, distCoeff_r, res, allCorners_r, allIds_r, camera = right_name, threshold=2.5)
         if self.traceLevel == 2 or self.traceLevel == 4 or self.traceLevel == 10:
             print('Length of allIds_l')
             print(len(allIds_l))
@@ -1613,6 +1613,24 @@ class StereoCalibration(object):
                 obj_pts, left_corners_sampled, right_corners_sampled,
                 cameraMatrix_l, distCoeff_l, cameraMatrix_r, distCoeff_r, None,
                 R=r_in, T=t_in, criteria=stereocalib_criteria , flags=flags)
+                threshold = 3
+                if np.any(np.array(_).T[0] > threshold):
+                    print(f"Some images are over {threshold}px epipolar error, removing them.")
+                    removed = []
+                    for index, i in enumerate(np.array(_).T[0]):
+                        if threshold < i:
+                            del obj_pts[index]
+                            del left_corners_sampled[index]
+                            del right_corners_sampled[index]
+                            removed.append(index)
+                    print("Removed images: ", [self.img_path[i] for i in removed])
+                    if len(left_corners_sampled) < 3 or len(right_corners_sampled) < 3:
+                        print("Filtered almost all images except 3. Repeat the calibration process.")
+                        return -1
+                    ret, M1, d1, M2, d2, R, T, E, F, _ = cv2.stereoCalibrateExtended(
+                    obj_pts, left_corners_sampled, right_corners_sampled,
+                    cameraMatrix_l, distCoeff_l, cameraMatrix_r, distCoeff_r, None,
+                    R=r_in, T=t_in, criteria=stereocalib_criteria , flags=flags)
 
                 r_euler = Rotation.from_matrix(R).as_euler('xyz', degrees=True)
                 print(f'Epipolar error is {ret}')
