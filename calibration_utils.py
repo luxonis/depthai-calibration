@@ -1624,7 +1624,7 @@ class StereoCalibration(object):
                             del right_corners_sampled[index]
                             removed.append(index)
                     print(f"Removed images: {len(removed)}/{len(self.img_path)}. Which:", [self.img_path[i] for i in removed])
-                    if len(removed)/len(self.img_path) < 0.5:
+                    if len(removed)/len(self.img_path) > 0.5:
                         print(f"Filtered more than 50\% of images. Repeat the calibration process.")
                         return -1
                     ret, M1, d1, M2, d2, R, T, E, F, _ = cv2.stereoCalibrateExtended(
