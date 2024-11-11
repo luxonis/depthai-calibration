@@ -15,7 +15,7 @@ class StereoExceptions(Exception):
   def __init__(self, message, stage, path=None, *args, **kwargs) -> None:
     self.stage = stage
     self.path = path
-    super().__init__(message, *args, **kwargs)
+    super().__init__(message, *args)
 
   @property
   def summary(self) -> str:
@@ -387,7 +387,7 @@ def remove_and_filter_stereo_features(leftCamData: CameraData, rightCamData: Cam
 
   return leftCamData, rightCamData
 
-def calculate_epipolar_error(left_cam_info, right_cam_info, left_cam, right_cam, board_config, extrinsics):
+def calculate_epipolar_error(left_cam_info: CameraData, right_cam_info: CameraData, left_cam, right_cam, board_config, extrinsics):
   if extrinsics[0] == -1:
     return -1, extrinsics[1]
   stereoConfig = None
@@ -593,24 +593,16 @@ def features_filtering_function(rvecs, tvecs, cameraMatrix, distCoeffs, filtered
 
   return all_corners ,all_ids, all_error, removed_corners, removed_ids, removed_error
 
-def detect_charuco_board(config: CalibrationConfig, image: np.array):
-  arucoParams = cv2.aruco.DetectorParameters_create()
-  arucoParams.minMarkerDistanceRate = 0.01
-  corners, ids, rejectedImgPoints = cv2.aruco.detectMarkers(image, config.dictionary, parameters=arucoParams)  # First, detect markers
-  marker_corners, marker_ids, refusd, recoverd = cv2.aruco.refineDetectedMarkers(image, config.board, corners, ids, rejectedCorners=rejectedImgPoints)
-  # If found, add object points, image points (after refining them)
-  if len(marker_corners) > 0:
-    ret, corners, ids = cv2.aruco.interpolateCornersCharuco(marker_corners,marker_ids,image, config.board, minMarkers = 1)
-    return ret, corners, ids, marker_corners, marker_ids
-  else:
-    return None, None, None, None, None
-
 def camera_pose_charuco(objpoints: np.array, corners: np.array, ids: np.array, K: np.array, d: np.array, ini_threshold = 2, min_inliers = 0.95, threshold_stepper = 1, max_threshold = 50):
   objects = []
   while len(objects) < len(objpoints[:,0,0]) * min_inliers:
     if ini_threshold > max_threshold:
       break
     ret, rvec, tvec, objects  = cv2.solvePnPRansac(objpoints, corners, K, d, flags = cv2.SOLVEPNP_P3P, reprojectionError = ini_threshold,  iterationsCount = 10000, confidence = 0.9)
+
+    if not ret:
+      break
+
     imgpoints2 = objpoints.copy()
 
     all_corners = corners.copy()
@@ -633,71 +625,6 @@ def compute_reprojection_errors(obj_pts: np.array, img_pts: np.array, K: np.arra
     proj_pts, _ = cv2.projectPoints(obj_pts, rvec, tvec, K, dist)
   errs = np.linalg.norm(np.squeeze(proj_pts) - np.squeeze(img_pts), axis = 1)
   return errs
-
-def analyze_charuco(config: CalibrationConfig, images, scale_req=False, req_resolution=(800, 1280)):
-  """
-  Charuco base pose estimation.
-  """
-  # print("POSE ESTIMATION STARTS:")
-  allCorners = []
-  allIds = []
-  all_marker_corners = []
-  all_marker_ids = []
-  all_recovered = []
-  # decimator = 0
-  # SUB PIXEL CORNER DETECTION CRITERION
-  criteria = (cv2.TERM_CRITERIA_EPS +
-        cv2.TERM_CRITERIA_MAX_ITER, 10000, 0.00001)
-  count = 0
-  skip_vis = False
-  for im in images:
-    img_pth = Path(im)
-    frame = cv2.imread(im)
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    expected_height = gray.shape[0]*(req_resolution[1]/gray.shape[1])
-
-    if scale_req and not (gray.shape[0] == req_resolution[0] and gray.shape[1] == req_resolution[1]):
-      if int(expected_height) == req_resolution[0]:
-        # resizing to have both stereo and rgb to have same
-        # resolution to capture extrinsics of the rgb-right camera
-        gray = cv2.resize(gray, req_resolution[::-1],
-                  interpolation=cv2.INTER_CUBIC)
-      else:
-        # resizing and cropping to have both stereo and rgb to have same resolution
-        # to calculate extrinsics of the rgb-right camera
-        scale_width = req_resolution[1]/gray.shape[1]
-        dest_res = (
-          int(gray.shape[1] * scale_width), int(gray.shape[0] * scale_width))
-        gray = cv2.resize(
-          gray, dest_res, interpolation=cv2.INTER_CUBIC)
-        if gray.shape[0] < req_resolution[0]:
-          raise RuntimeError("resizeed height of rgb is smaller than required. {0} < {1}".format(
-            gray.shape[0], req_resolution[0]))
-        # print(gray.shape[0] - req_resolution[0])
-        del_height = (gray.shape[0] - req_resolution[0]) // 2
-        # gray = gray[: req_resolution[0], :]
-        gray = gray[del_height: del_height + req_resolution[0], :]
-
-      count += 1
-
-    ret, charuco_corners, charuco_ids, marker_corners, marker_ids  = detect_charuco_board(config, gray)
-
-    if charuco_corners is not None and charuco_ids is not None and len(charuco_corners) > 3:
-
-      charuco_corners = cv2.cornerSubPix(gray, charuco_corners,
-                winSize=(5, 5),
-                zeroZone=(-1, -1),
-                criteria=criteria)
-      allCorners.append(charuco_corners)  # Charco chess corners
-      allIds.append(charuco_ids)  # charuco chess corner id's
-      all_marker_corners.append(marker_corners)
-      all_marker_ids.append(marker_ids)
-    else:
-      print(im)
-      return f'Failed to detect more than 3 markers on image {im}', None, None, None, None, None
-
-  # imsize = gray.shape[::-1]
-  return allCorners, allIds, all_marker_corners, all_marker_ids, gray.shape[::-1], all_recovered
 
 def undistort_visualization(self, img_list, K, D, img_size, name):
   for index, im in enumerate(img_list):
@@ -922,7 +849,7 @@ class StereoCalibration(object):
 
     """Class to Calculate Calibration and Rectify a Stereo Camera."""
 
-  def calibrate(self, board_config, filepath, camera_model, intrinsics: List[Dataset] = [], extrinsics: List[Tuple[Dataset, Dataset]] = []):
+  def calibrate(self, board_config, filepath, camera_model, intrinsicCameras: List[Dataset] = [], extrinsicPairs: List[Tuple[Dataset, Dataset]] = []):
     """Function to calculate calibration for stereo camera."""
     # init object data
     self._cameraModel = camera_model
@@ -932,14 +859,14 @@ class StereoCalibration(object):
 
     self.cams = []
 
-    
     config = CalibrationConfig(
       self.filtering_enable, self.ccm_model, self.initial_max_threshold, self.initial_min_filtered, self.calibration_max_threshold, self.calibration_min_filtered,
       camera_model, (cv2.TERM_CRITERIA_COUNT + cv2.TERM_CRITERIA_EPS, 300, 1e-9)
     )
     
-    for a, b in extrinsics:
+    for a, b in extrinsicPairs:
       if len(a.allIds) != len(b.allIds):
+        print('Not all dataset for extrinsic calibration have the same number of images')
         raise RuntimeError('Not all dataset for extrinsic calibration have the same number of images') # TODO : This isn't thorough enough
 
     pw = ParallelWorker(1)
@@ -947,7 +874,7 @@ class StereoCalibration(object):
     stereoConfigs = []
 
     # Calibrate camera intrinsics for all provided datasets
-    for dataset in intrinsics:
+    for dataset in intrinsicCameras:
       camData = [c for c in board_config['cameras'].values() if c['name'] == dataset.name][0]
       
       if "calib_model" in camData:
@@ -982,7 +909,7 @@ class StereoCalibration(object):
       else:
         camData = calibrate_ccm_intrinsics(config, camData)
 
-    for left, right in extrinsics:
+    for left, right in extrinsicPairs:
       left_cam_info = camInfos[left.name]
       right_cam_info = camInfos[right.name]
 
@@ -1011,6 +938,21 @@ class StereoCalibration(object):
       stereoConfigs.append(stereo_config)
 
     pw.execute()
+    
+    # def get_board_for_cam(cam_info: CameraData):
+    #   for pair in extrinsicPairs:
+    #     for cam in pair:
+    #       if cam.name == cam_info['name']:
+    #         return cam.board
+    
+    # test_epipolar_charuco(
+    #   {**left_cam_info.ret(), 'images_path': '/home/developer/debug_session/14442C10111E19D000/2024_11_08_18-06-05/thermal/capture/color'}, 
+    #   {**right_cam_info.ret(), 'images_path': '/home/developer/debug_session/14442C10111E19D000/2024_11_08_18-06-05/thermal/capture/thermal'},
+    #   get_board_for_cam(left_cam_info.ret()),
+    #   get_board_for_cam(right_cam_info.ret()),
+    #   extrinsics.ret()[2], # Translation between left and right Cameras
+    #   extrinsics.ret()[3], # Left Rectification rotation 
+    #   extrinsics.ret()[4]) # Right Rectification rotation
 
     # Extract camera info structs and stereo config
     for cam, camInfo in camInfos.items():
@@ -1022,4 +964,4 @@ class StereoCalibration(object):
       if stereoConfig.ret():
         board_config['stereo_config'].update(stereoConfig.ret())
 
-    return  board_config
+    return board_config
