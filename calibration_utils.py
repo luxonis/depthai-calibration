@@ -866,10 +866,7 @@ class StereoCalibration(object):
         distortion_model = model_ccm
       else:
         calib_model = camera_model
-        if camData["name"] in self.ccm_model:
-          distortion_model = self.ccm_model[camData["name"]]
-        else:
-          distortion_model = DistortionModel.Tilted # Use the tilted model by default
+        distortion_model = DistortionModel.Tilted # Use the tilted model by default
 
       camData['size'] = dataset.imageSize
       camData['calib_model'] = calib_model
