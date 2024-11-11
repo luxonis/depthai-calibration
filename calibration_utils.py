@@ -838,29 +838,10 @@ def proxy_estimate_pose_and_filter_single(camData, corners, ids, dataset):
 class StereoCalibration(object):
   """Class to Calculate Calibration and Rectify a Stereo Camera."""
 
-  def __init__(self, traceLevel: float = 1.0, outputScaleFactor: float = 0.5, model = None,distortion_model = {}, filtering_enable = False, initial_max_threshold = 15, initial_min_filtered = 0.05, calibration_max_threshold = 10):
-    self.filtering_enable = filtering_enable
-    self.ccm_model = distortion_model
-    self.output_scale_factor = outputScaleFactor
-    self.initial_max_threshold = initial_max_threshold
-    self.initial_min_filtered = initial_min_filtered
-    self.calibration_max_threshold = calibration_max_threshold
-    self.calibration_min_filtered = initial_min_filtered
-
-    """Class to Calculate Calibration and Rectify a Stereo Camera."""
-
-  def calibrate(self, board_config, filepath, camera_model, intrinsicCameras: List[Dataset] = [], extrinsicPairs: List[Tuple[Dataset, Dataset]] = []):
+  def calibrate(self, board_config, camera_model, intrinsicCameras: List[Dataset] = [], extrinsicPairs: List[Tuple[Dataset, Dataset]] = [], initial_max_threshold = 15, initial_min_filtered = 0.05):
     """Function to calculate calibration for stereo camera."""
-    # init object data
-    self._cameraModel = camera_model
-    self._data_path = filepath
-    self.stereocalib_criteria = (cv2.TERM_CRITERIA_COUNT +
-                   cv2.TERM_CRITERIA_EPS, 300, 1e-9)
-
-    self.cams = []
-
     config = CalibrationConfig(
-      self.filtering_enable, self.ccm_model, self.initial_max_threshold, self.initial_min_filtered, self.calibration_max_threshold, self.calibration_min_filtered,
+      initial_max_threshold, initial_min_filtered,
       camera_model, (cv2.TERM_CRITERIA_COUNT + cv2.TERM_CRITERIA_EPS, 300, 1e-9)
     )
     
@@ -884,7 +865,7 @@ class StereoCalibration(object):
         calib_model = cameraModel_ccm
         distortion_model = model_ccm
       else:
-        calib_model = self._cameraModel
+        calib_model = camera_model
         if camData["name"] in self.ccm_model:
           distortion_model = self.ccm_model[camData["name"]]
         else:
@@ -896,7 +877,7 @@ class StereoCalibration(object):
 
       if PER_CCM:
         camData = pw.run(get_features, config, camData)
-        if self._cameraModel == "fisheye":
+        if camera_model== "fisheye":
           camData = pw.run(filter_features_fisheye, camData, dataset.allCorners, dataset.allIds) # TODO : Input types are wrong
         elif dataset.enableFiltering:
           corners, ids = pw.map(proxy_estimate_pose_and_filter_single, camData, dataset.allCorners, dataset.allIds, dataset)[:2]
@@ -929,30 +910,15 @@ class StereoCalibration(object):
 
         extrinsics = pw.run(calibrate_stereo_perspective_per_ccm, config, obj_pts, left_corners_sampled, right_corners_sampled, left_cam_info, right_cam_info)
       else:
-        if self._cameraModel == 'perspective':
+        if camera_model == 'perspective':
           extrinsics = pw.run(calibrate_stereo_perspective, config, obj_pts, left_corners_sampled, right_corners_sampled, left_cam_info, right_cam_info)
-        elif self._cameraModel == 'fisheye':
+        elif camera_model == 'fisheye':
           extrinsics = pw.run(calibrate_stereo_fisheye, config, obj_pts, left_corners_sampled, right_corners_sampled, left_cam_info, right_cam_info)
       left_cam_info, stereo_config = pw.run(calculate_epipolar_error, left_cam_info, right_cam_info, left, right, board_config, extrinsics)[:2]
       camInfos[left.name] = left_cam_info
       stereoConfigs.append(stereo_config)
 
     pw.execute()
-    
-    # def get_board_for_cam(cam_info: CameraData):
-    #   for pair in extrinsicPairs:
-    #     for cam in pair:
-    #       if cam.name == cam_info['name']:
-    #         return cam.board
-    
-    # test_epipolar_charuco(
-    #   {**left_cam_info.ret(), 'images_path': '/home/developer/debug_session/14442C10111E19D000/2024_11_08_18-06-05/thermal/capture/color'}, 
-    #   {**right_cam_info.ret(), 'images_path': '/home/developer/debug_session/14442C10111E19D000/2024_11_08_18-06-05/thermal/capture/thermal'},
-    #   get_board_for_cam(left_cam_info.ret()),
-    #   get_board_for_cam(right_cam_info.ret()),
-    #   extrinsics.ret()[2], # Translation between left and right Cameras
-    #   extrinsics.ret()[3], # Left Rectification rotation 
-    #   extrinsics.ret()[4]) # Right Rectification rotation
 
     # Extract camera info structs and stereo config
     for cam, camInfo in camInfos.items():
