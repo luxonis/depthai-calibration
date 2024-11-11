@@ -107,26 +107,18 @@ class Dataset:
     self.enableFiltering = enableFiltering
 
 class CalibrationConfig:
-  def __init__(self, enableFiltering = True, ccmModel = '', initialMaxThreshold = 0, initialMinFiltered = 0, calibrationMaxThreshold = 0, calibrationMinFiltered = 0,
+  def __init__(self, initialMaxThreshold = 0, initialMinFiltered = 0, ,
                cameraModel = 0, stereoCalibCriteria = 0):
     """Calibration configuration options
 
     Args:
-        enableFiltering (bool, optional): Whether corners should be filtered for outliers. Defaults to True.
-        ccmModel (str, optional): _description_. Defaults to ''.
         initialMaxThreshold (int, optional): _description_. Defaults to 0.
         initialMinFiltered (int, optional): _description_. Defaults to 0.
-        calibrationMaxThreshold (int, optional): _description_. Defaults to 0.
-        calibrationMinFiltered (int, optional): _description_. Defaults to 0.
         cameraModel (int, optional): _description_. Defaults to 0.
         stereoCalibCriteria (int, optional): _description_. Defaults to 0.
     """
-    self.enableFiltering = enableFiltering
-    self.ccmModel = ccmModel # Distortion model
     self.initialMaxThreshold = initialMaxThreshold
     self.initialMinFiltered = initialMinFiltered
-    self.calibrationMaxThreshold = calibrationMaxThreshold
-    self.calibrationMinFiltered = calibrationMinFiltered
     self.cameraModel = cameraModel
     self.stereoCalibCriteria = stereoCalibCriteria
 
