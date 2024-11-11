@@ -107,7 +107,7 @@ class Dataset:
     self.enableFiltering = enableFiltering
 
 class CalibrationConfig:
-  def __init__(self, initialMaxThreshold = 0, initialMinFiltered = 0, ,
+  def __init__(self, initialMaxThreshold = 0, initialMinFiltered = 0,
                cameraModel = 0, stereoCalibCriteria = 0):
     """Calibration configuration options
 
