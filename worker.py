@@ -174,15 +174,18 @@ def worker_controller(_stop: multiprocessing.Event, _in: multiprocessing.Queue, 
   while not _stop.is_set():
     try:
       task: ParallelTask | None = _in.get(timeout=0.01)
+      
+      #try:
+      ret, exc = None, None
+      ret = task._fun(*task._args, **task._kwargs)
+      #except BaseException as e:
+        #exc = e
+      #finally:
+      _out.put((task._id, ret, exc))
     except queue.Empty:
       continue
-    #try:
-    ret, exc = None, None
-    ret = task._fun(*task._args, **task._kwargs)
-    #except BaseException as e:
-      #exc = e
-    #finally:
-    _out.put((task._id, ret, exc))
+    except:
+      break
 
 class ParallelWorker:
   def __init__(self, workers: int = 16):
@@ -218,26 +221,31 @@ class ParallelWorker:
     doneTasks = []
     remaining = len(self._tasks)
 
-    while remaining > 0:
-      for task in self._tasks:
-        if task.isExecutable():
-          if isinstance(task, ParallelTask):
-            task.resolveArguments()
-            workerIn.put(task)
-            doneTasks.append(task)
-            self._tasks.remove(task)
-          else:
-            newTasks = task.tasks()
-            remaining += len(newTasks) - 1
-            self._tasks.extend(newTasks)
-            self._tasks.remove(task)
+    try:
+      while remaining > 0:
+        for task in self._tasks:
+          if task.isExecutable():
+            if isinstance(task, ParallelTask):
+              task.resolveArguments()
+              #workerIn.put(task)
+              ret = task._fun(*task._args, **task._kwargs)
+              workerOut.put((task._id, ret, None))
+              
+              doneTasks.append(task)
+              self._tasks.remove(task)
+            else:
+              newTasks = task.tasks()
+              remaining += len(newTasks) - 1
+              self._tasks.extend(newTasks)
+              self._tasks.remove(task)
 
-      if not workerOut.empty():
-        tId, ret, exc = workerOut.get()
-        for task in doneTasks:
-          if task._id == tId:
-            task.finish(ret, exc)
-            remaining -= 1
-    stop.set()
-    for p in processes:
-      p.join()
+        if not workerOut.empty():
+          tId, ret, exc = workerOut.get()
+          for task in doneTasks:
+            if task._id == tId:
+              task.finish(ret, exc)
+              remaining -= 1
+    finally:
+      stop.set()
+      for p in processes:
+        p.join()
