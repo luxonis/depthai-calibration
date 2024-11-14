@@ -387,17 +387,19 @@ def remove_and_filter_stereo_features(leftCamData: CameraData, rightCamData: Cam
 
   return leftCamData, rightCamData
 
-def calculate_epipolar_error(left_cam_info: CameraData, right_cam_info: CameraData, left_cam, right_cam, board_config, extrinsics):
+def calculate_epipolar_error(left_cam_info: CameraData, right_cam_info: CameraData, left_cam: Dataset, right_cam: Dataset, board_config, extrinsics):
   if extrinsics[0] == -1:
     return -1, extrinsics[1]
   stereoConfig = None
   if 'stereo_config' in board_config:
-    if board_config['stereo_config']['left_cam'] == left_cam and board_config['stereo_config']['right_cam'] == right_cam: # TODO : Is this supposed to take the last camera pair?
+    leftCamName = board_config['cameras'][board_config['stereo_config']['left_cam']]['name']
+    rightCamName = board_config['cameras'][board_config['stereo_config']['right_cam']]['name']
+    if leftCamName == left_cam.name and rightCamName == right_cam.name: # TODO : Is this supposed to take the last camera pair?
       stereoConfig = {
         'rectification_left': extrinsics[3],
         'rectification_right': extrinsics[4]
       }
-    elif board_config['stereo_config']['left_cam'] == right_cam and board_config['stereo_config']['right_cam'] == left_cam:
+    elif leftCamName == right_cam and rightCamName == left_cam:
       stereoConfig = {
         'rectification_left': extrinsics[4],
         'rectification_right': extrinsics[3]
