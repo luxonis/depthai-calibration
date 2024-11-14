@@ -840,7 +840,7 @@ def proxy_estimate_pose_and_filter_single(camData, corners, ids, dataset):
 class StereoCalibration(object):
   """Class to Calculate Calibration and Rectify a Stereo Camera."""
 
-  def calibrate(self, board_config, camera_model, intrinsicCameras: List[Dataset] = [], extrinsicPairs: List[Tuple[Dataset, Dataset]] = [], initial_max_threshold = 15, initial_min_filtered = 0.05):
+  def calibrate(self, board_config, camera_model, intrinsicCameras: List[Dataset] = [], extrinsicPairs: List[Tuple[Dataset, Dataset]] = [], initial_max_threshold = 15, initial_min_filtered = 0.05, debug: bool = False):
     """Function to calculate calibration for stereo camera."""
     config = CalibrationConfig(
       initial_max_threshold, initial_min_filtered,
@@ -855,6 +855,7 @@ class StereoCalibration(object):
     pw = ParallelWorker(1)
     camInfos = {}
     stereoConfigs = []
+    allExtrinsics = []
 
     # Calibrate camera intrinsics for all provided datasets
     for dataset in intrinsicCameras:
@@ -914,6 +915,7 @@ class StereoCalibration(object):
         elif camera_model == 'fisheye':
           extrinsics = pw.run(calibrate_stereo_fisheye, config, obj_pts, left_corners_sampled, right_corners_sampled, left_cam_info, right_cam_info)
       left_cam_info, stereo_config = pw.run(calculate_epipolar_error, left_cam_info, right_cam_info, left, right, board_config, extrinsics)[:2]
+      allExtrinsics.append(extrinsics)
       camInfos[left.name] = left_cam_info
       stereoConfigs.append(stereo_config)
 
@@ -928,5 +930,8 @@ class StereoCalibration(object):
     for stereoConfig in stereoConfigs:
       if stereoConfig.ret():
         board_config['stereo_config'].update(stereoConfig.ret())
+
+    if debug:
+      return [s.ret() for s in stereoConfigs], [e.ret() for e in allExtrinsics], board_config, {k: v.ret() for k, v in camInfos.items()}
 
     return board_config
