@@ -351,17 +351,17 @@ def calibrate_stereo_fisheye(config: CalibrationConfig, obj_pts, left_corners_sa
 
   return [ret, R, T, R_l, R_r, P_l, P_r]
 
-def find_stereo_common_features(leftDataset: Dataset, rightDataset: Dataset):
+def find_stereo_common_features(leftCorners, leftIds, rightCorners, rightIds, board: CharucoBoard):
   left_corners_sampled = []
   right_corners_sampled = []
   obj_pts = []
   failed = 0
 
-  for i, _ in enumerate(leftDataset.allIds): # For ids in all images
-    commonIds = np.intersect1d(leftDataset.allIds[i], rightDataset.allIds[i])
-    left_sub_corners = leftDataset.allCorners[i][np.isin(leftDataset.allIds[i], commonIds)]
-    right_sub_corners = rightDataset.allCorners[i][np.isin(rightDataset.allIds[i], commonIds)]
-    obj_pts_sub = leftDataset.board.board.chessboardCorners[commonIds]
+  for i, _ in enumerate(leftIds): # For ids in all images
+    commonIds = np.intersect1d(leftIds[i], rightIds[i])
+    left_sub_corners = leftCorners[i][np.isin(leftIds[i], commonIds)]
+    right_sub_corners = rightCorners[i][np.isin(rightIds[i], commonIds)]
+    obj_pts_sub = board.board.chessboardCorners[commonIds]
 
     if len(commonIds) > 6:
       obj_pts.append(obj_pts_sub)
@@ -370,7 +370,7 @@ def find_stereo_common_features(leftDataset: Dataset, rightDataset: Dataset):
     else:
       failed += 1
 
-  if failed > len(leftDataset.allIds) / 3:
+  if failed > len(leftIds) / 3:
     raise RuntimeError('More than 1/3 of images had less than 6 common features found')
 
   return left_corners_sampled, right_corners_sampled, obj_pts
@@ -382,10 +382,10 @@ def undistort_points_fisheye(allCorners, camInfo):
   return [cv2.fisheye.undistortPoints(np.array(corners), camInfo['intrinsics'], camInfo['dist_coeff'], P=camInfo['intrinsics']) for corners in allCorners]
 
 def remove_and_filter_stereo_features(leftCamData: CameraData, rightCamData: CameraData, leftDataset: Dataset, rightDataset: Dataset):
-  leftCamData['filtered_corners'], leftCamData['filtered_ids'] = estimate_pose_and_filter(leftCamData, leftDataset.allCorners, leftDataset.allIds, leftDataset.board.board)
-  rightCamData['filtered_corners'], rightCamData['filtered_ids'] = estimate_pose_and_filter(rightCamData, rightDataset.allCorners, rightDataset.allIds, leftDataset.board.board)
+  leftCorners, leftIds = estimate_pose_and_filter(leftCamData, leftDataset.allCorners, leftDataset.allIds, leftDataset.board.board)
+  rightCorners, rightIds = estimate_pose_and_filter(rightCamData, rightDataset.allCorners, rightDataset.allIds, leftDataset.board.board)
 
-  return leftCamData, rightCamData
+  return leftCorners, leftIds, rightCorners, rightIds
 
 def calculate_epipolar_error(left_cam_info: CameraData, right_cam_info: CameraData, left_cam: Dataset, right_cam: Dataset, board_config, extrinsics):
   if extrinsics[0] == -1:
@@ -746,6 +746,7 @@ def calibrate_camera_charuco(allCorners, allIds, imsize, distortion_flags, camer
           flags=flags,
           criteria=(cv2.TERM_CRITERIA_EPS & cv2.TERM_CRITERIA_COUNT, 50000, 1e-9))
       except:
+        print('failed on dataset', dataset.name)
         raise StereoExceptions(message="Intrisic calibration failed", stage="intrinsic_calibration", element='', id=0)
       cameraIntrinsics = camera_matrix
       distCoeff = distortion_coefficients
@@ -851,8 +852,11 @@ class StereoCalibration(object):
       if len(a.allIds) != len(b.allIds):
         print('Not all dataset for extrinsic calibration have the same number of images')
         raise RuntimeError('Not all dataset for extrinsic calibration have the same number of images') # TODO : This isn't thorough enough
+      if a.board is not b.board:
+        print('Extrinsic pair has different dataset board')
+        raise RuntimeError('Extrinsic pair has different dataset board')
 
-    pw = ParallelWorker(1)
+    pw = ParallelWorker(10)
     camInfos = {}
     stereoConfigs = []
     allExtrinsics = []
@@ -894,11 +898,9 @@ class StereoCalibration(object):
       left_cam_info = camInfos[left.name]
       right_cam_info = camInfos[right.name]
 
-      if PER_CCM and EXTRINSICS_PER_CCM:
-        # TODO : Shouldn't refilter if it's already been filtered in intrinsic calibration, or should at least use two calls to filter_single
-        left_cam_info, right_cam_info = pw.run(remove_and_filter_stereo_features, left_cam_info, right_cam_info, left, right)[:2]
+      leftCorners, leftIds, rightCorners, rightIds = pw.run(remove_and_filter_stereo_features, left_cam_info, right_cam_info, left, right)[:4]
 
-      left_corners_sampled, right_corners_sampled, obj_pts= pw.run(find_stereo_common_features, left, right)[:3]
+      left_corners_sampled, right_corners_sampled, obj_pts= pw.run(find_stereo_common_features, leftCorners, leftIds, rightCorners, rightIds, left.board)[:3]
 
       if PER_CCM and EXTRINSICS_PER_CCM:
         if left_cam_info['calib_model'] == "perspective":
