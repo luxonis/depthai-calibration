@@ -1617,15 +1617,15 @@ class StereoCalibration(object):
                 if np.any(np.array(_).T[0] > threshold):
                     print(f"Some images are over {threshold}px epipolar error, removing them.")
                     removed = []
-                    for index, i in enumerate(np.array(_).T[0]):
+                    for index, i in reversed(list(enumerate(np.array(_).T[0]))):
                         if threshold < i:
                             del obj_pts[index]
                             del left_corners_sampled[index]
                             del right_corners_sampled[index]
                             removed.append(index)
                     print(f"Removed images: {len(removed)}/{len(self.img_path)}. Which:", [self.img_path[i] for i in removed])
-                    if len(removed)/len(self.img_path) > 0.5:
-                        print(f"Filtered more than 50\% of images. Repeat the calibration process.")
+                    if len(removed)/len(self.img_path) > 0.8:
+                        print(f"Filtered more than 80\% of images. Repeat the calibration process.")
                         return -1
                     ret, M1, d1, M2, d2, R, T, E, F, _ = cv2.stereoCalibrateExtended(
                     obj_pts, left_corners_sampled, right_corners_sampled,
