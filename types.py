@@ -1,4 +1,4 @@
-from typing import TypedDict, List, Tuple
+from typing import TypedDict, List, Tuple, Iterable
 import cv2.aruco as aruco
 from enum import Enum
 import numpy as np
@@ -65,8 +65,8 @@ class CharucoBoard:
 
 class Dataset:
   class Images:
-    def __init__(self, images: List[np.ndarray | str]):
-      self._images = images
+    def __init__(self, images: Iterable[np.ndarray | str]):
+      self._images = list(images)
 
     def at(self, key):
       if isinstance(self._images[key], str):
@@ -77,7 +77,7 @@ class Dataset:
       return len(self._images)
 
     def __iter__(self):
-      for i in len(self._images):
+      for i, _ in enumerate(self._images):
         yield self.at(i)
 
     def __getitem__(self, key):
@@ -99,7 +99,7 @@ class Dataset:
         enableFiltering (bool, optional): Whether to filter provided corners, or use all of them as is. Defaults to True.
     """
     self.name = name
-    self.images = Dataset.Images(images)
+    self.images = images if isinstance(images, Dataset.Images) else Dataset.Images(images)
     self.allCorners = allCorners
     self.allIds = allIds
     self.imageSize = imageSize
