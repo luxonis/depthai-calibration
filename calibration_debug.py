@@ -74,6 +74,36 @@ def detect_charuco_board(config: CharucoBoard, image: np.array):
   else:
     return None, None, None, None, None
 
+def display_rectification(image_data_pairs, images_corners_l, images_corners_r, image_epipolar_color, isHorizontal):
+  print("Displaying Stereo Pair for visual inspection. Press the [ESC] key to exit.")
+  colors = [(0, 255 , 0), (0, 0, 255)]
+  for idx, image_data_pair in enumerate(image_data_pairs):
+    if isHorizontal:
+      img_concat = cv2.hconcat(
+        [image_data_pair[0], image_data_pair[1]])
+      for left_pt, right_pt, colorMode in zip(images_corners_l[idx], images_corners_r[idx], image_epipolar_color[idx]):
+        cv2.line(img_concat,
+                 (int(left_pt[0][0]), int(left_pt[0][1])), (int(right_pt[0][0]) + image_data_pair[0].shape[1], int(right_pt[0][1])),
+                 colors[colorMode], 1)
+    else:
+      img_concat = cv2.vconcat(
+        [image_data_pair[0], image_data_pair[1]])
+      for left_pt, right_pt, colorMode in zip(images_corners_l[idx], images_corners_r[idx], image_epipolar_color[idx]):
+        cv2.line(img_concat,
+               (int(left_pt[0][0]), int(left_pt[0][1])), (int(right_pt[0][0]), int(right_pt[0][1])  + image_data_pair[0].shape[0]),
+               colors[colorMode], 1)
+
+    img_concat = cv2.resize(img_concat, (0, 0), fx=0.8, fy=0.8)
+
+    # show image
+    cv2.imshow('Stereo Pair', img_concat)
+    while True:
+      k = cv2.waitKey(1)
+      if k == 27:  # Esc key to stop
+        break
+
+  cv2.destroyWindow('Stereo Pair')
+
 # Debugging functions
 
 def debug_epipolar_charuco(left_cam_info: CameraData, right_cam_info: CameraData, left_board: CharucoBoard, right_board: CharucoBoard, t, r_l, r_r):
@@ -223,7 +253,10 @@ def debug_epipolar_charuco(left_cam_info: CameraData, right_cam_info: CameraData
       line_row += 30
 
     cv2.imshow('Stereo Pair', img_concat)
-    k = cv2.waitKey(1)
+    while True:
+      k = cv2.waitKey(1)
+      if k == 27:  # Esc key to stop
+        break
     
     if res2_l[1] is not None and res2_r[2] is not None and len(res2_l[1]) > 3 and len(res2_r[1]) > 3:
 
@@ -251,6 +284,8 @@ def debug_epipolar_charuco(left_cam_info: CameraData, right_cam_info: CameraData
           continue
         corners_l.append(res2_l[1][j])
         corners_r.append(res2_r[1][idx])
+      #if len(corners_l) == 0 or len(corners_r) == 0:
+        #continue
 
       imgpoints_l.append(corners_l)
       imgpoints_r.append(corners_r)
@@ -273,6 +308,9 @@ def debug_epipolar_charuco(left_cam_info: CameraData, right_cam_info: CameraData
           str(localError))
     else:
       print('Numer of corners is in left -> and right ->')
+      imgpoints_l.append([])
+      imgpoints_r.append([])
+      continue
       return -1
     lText = cv2.putText(cv2.cvtColor(image_data_pair[0],cv2.COLOR_GRAY2RGB), img_pth_left.name, org, cv2.FONT_HERSHEY_SIMPLEX, 1, (2, 0, 255), 2, cv2.LINE_AA)
     rText = cv2.putText(cv2.cvtColor(image_data_pair[1],cv2.COLOR_GRAY2RGB), img_pth_right.name + " Error: " + str(localError), org, cv2.FONT_HERSHEY_SIMPLEX, 1, (2, 0, 255), 2, cv2.LINE_AA)
@@ -292,7 +330,7 @@ def debug_epipolar_charuco(left_cam_info: CameraData, right_cam_info: CameraData
   avg_epipolar = epi_error_sum / total_corners
   print("Average Epipolar Error is : " + str(avg_epipolar))
 
-  #if self.enable_rectification_disp:
-  #  self.display_rectification(image_data_pairs, imgpoints_l, imgpoints_r, image_epipolar_color, isHorizontal)
+  if True or enable_rectification_disp:
+    display_rectification(image_data_pairs, imgpoints_l, imgpoints_r, image_epipolar_color, isHorizontal)
 
   return avg_epipolar

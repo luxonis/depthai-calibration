@@ -227,10 +227,7 @@ class ParallelWorker:
           if task.isExecutable():
             if isinstance(task, ParallelTask):
               task.resolveArguments()
-              #workerIn.put(task)
-              ret = task._fun(*task._args, **task._kwargs)
-              workerOut.put((task._id, ret, None))
-              
+              workerIn.put(task)
               doneTasks.append(task)
               self._tasks.remove(task)
             else:
