@@ -174,13 +174,12 @@ def worker_controller(_stop: multiprocessing.Event, _in: multiprocessing.Queue, 
   while not _stop.is_set():
     try:
       task: ParallelTask | None = _in.get(timeout=0.01)
-      
-      #try:
+
       ret, exc = None, None
-      ret = task._fun(*task._args, **task._kwargs)
-      #except BaseException as e:
-        #exc = e
-      #finally:
+      try:
+        ret = task._fun(*task._args, **task._kwargs)
+      except BaseException as e:
+        exc = e
       _out.put((task._id, ret, exc))
     except queue.Empty:
       continue
@@ -240,6 +239,8 @@ class ParallelWorker:
           tId, ret, exc = workerOut.get()
           for task in doneTasks:
             if task._id == tId:
+              if exc:
+                raise Exception(f'Calibration pipeline failed during \'{task}\'') from exc
               task.finish(ret, exc)
               remaining -= 1
     finally:
