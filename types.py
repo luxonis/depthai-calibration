@@ -105,6 +105,7 @@ class Dataset:
     self.imageSize = imageSize
     self.board = board
     self.enableFiltering = enableFiltering
+    self.id = hash(self)
 
 class CalibrationConfig:
   def __init__(self, initialMaxThreshold = 0, initialMinFiltered = 0,

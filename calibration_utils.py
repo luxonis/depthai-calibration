@@ -1,6 +1,7 @@
 from scipy.spatial.transform import Rotation
 from .worker import ParallelWorker
 from typing import List, Tuple
+from itertools import chain
 from pathlib import Path
 from .types import *
 import numpy as np
@@ -860,7 +861,7 @@ class StereoCalibration(object):
       initial_max_threshold, initial_min_filtered,
       camera_model, (cv2.TERM_CRITERIA_COUNT + cv2.TERM_CRITERIA_EPS, 300, 1e-9)
     )
-    
+
     for a, b in extrinsicPairs:
       if len(a.allIds) != len(b.allIds):
         print('Not all dataset for extrinsic calibration have the same number of images')
@@ -875,11 +876,17 @@ class StereoCalibration(object):
     allExtrinsics = []
     filteredCharucos = {}
 
+    # Compile a list of unique datasets
+    uniqueDatasets = intrinsicCameras
+    for dataset in chain(*extrinsicPairs):
+      if dataset not in uniqueDatasets:
+        uniqueDatasets.append(dataset)
+
     # Calibrate camera intrinsics for all provided datasets
-    for dataset in intrinsicCameras:
+    for dataset in uniqueDatasets:
       camData = [c for c in board_config['cameras'].values() if c['name'] == dataset.name][0]
-      
-      if "calib_model" in camData:
+
+      if "calib_model" in camData and len(camData["calib_model"].split("_")) > 1:
         cameraModel_ccm, model_ccm = camData["calib_model"].split("_")
         if cameraModel_ccm == "fisheye":
           model_ccm == None
@@ -911,16 +918,16 @@ class StereoCalibration(object):
 
         camData = pw.run(calibrate_charuco, camData, corners, ids, dataset)
         camData = pw.run(calibrate_ccm_intrinsics_per_ccm, config, camData, dataset)
-        camInfos[dataset.name] = camData
-        filteredCharucos[dataset.name] = [corners, ids]
+        camInfos[dataset.id] = camData
+        filteredCharucos[dataset.id] = [corners, ids]
       else:
         camData = calibrate_ccm_intrinsics(config, camData)
 
     for left, right in extrinsicPairs:
-      left_cam_info = camInfos[left.name]
-      right_cam_info = camInfos[right.name]
-      leftCorners, leftIds = filteredCharucos[left.name]
-      rightCorners, rightIds = filteredCharucos[right.name]
+      left_cam_info = camInfos[left.id]
+      right_cam_info = camInfos[right.id]
+      leftCorners, leftIds = filteredCharucos[left.id]
+      rightCorners, rightIds = filteredCharucos[right.id]
 
       left_corners_sampled, right_corners_sampled, obj_pts= pw.run(find_stereo_common_features, leftCorners, leftIds, rightCorners, rightIds, left.board)[:3]
 
@@ -940,16 +947,21 @@ class StereoCalibration(object):
           extrinsics = pw.run(calibrate_stereo_fisheye, config, obj_pts, left_corners_sampled, right_corners_sampled, left_cam_info, right_cam_info)
       left_cam_info, stereo_config = pw.run(calculate_epipolar_error, left_cam_info, right_cam_info, left, right, board_config, extrinsics)[:2]
       allExtrinsics.append(extrinsics)
-      camInfos[left.name] = left_cam_info
+      camInfos[left.id] = left_cam_info
       stereoConfigs.append(stereo_config)
 
     pw.execute()
 
-    # Extract camera info structs and stereo config
-    for cam, camInfo in camInfos.items():
+    # Construct board config from calibrated cam infos
+    for dataset in intrinsicCameras:
       for socket in board_config['cameras']:
-        if board_config['cameras'][socket]['name'] == cam:
-          board_config['cameras'][socket] = camInfo.ret()
+        if board_config['cameras'][socket]['name'] == dataset.name:
+          board_config['cameras'][socket] = camInfos[dataset.id].ret()
+
+    for left, _ in extrinsicPairs:
+      for socket in board_config['cameras']:
+        if board_config['cameras'][socket]['name'] == left.name:
+          board_config['cameras'][socket]['extrinsics'] = camInfos[left.id].ret()['extrinsics']
 
     for stereoConfig in stereoConfigs:
       if stereoConfig.ret():
