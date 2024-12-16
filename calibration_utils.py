@@ -968,6 +968,6 @@ class StereoCalibration(object):
         board_config['stereo_config'].update(stereoConfig.ret())
 
     if debug:
-      return [s.ret() for s in stereoConfigs], [e.ret() for e in allExtrinsics], board_config, {k: v.ret() for k, v in camInfos.items()}
+      return [s.ret() for s in stereoConfigs], [e.ret() for e in allExtrinsics], board_config, {k: v.ret() for k, v in camInfos.items()}, filteredCharucos
 
-    return board_config
+    return board_config, filteredCharucos
