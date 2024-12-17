@@ -2,7 +2,6 @@ from scipy.spatial.transform import Rotation
 from .worker import ParallelWorker
 from typing import List, Tuple
 from itertools import chain
-from pathlib import Path
 from .types import *
 import numpy as np
 import time
@@ -25,8 +24,10 @@ class StereoExceptions(Exception):
     """
     return f"'{self.args[0]}' (occured during stage '{self.stage}')"
 
-def estimate_pose_and_filter_single(camData: CameraData, corners, ids, charucoBoard):
-  objpoints = charucoBoard.chessboardCorners[ids]
+def estimate_pose_and_filter(camData: CameraData, corners, ids, charucoBoard: CharucoBoard):
+  """Very rough corner filtering on a single image"""
+
+  objpoints = charucoBoard.board.chessboardCorners[ids]
 
   ini_threshold=5
   threshold = None
@@ -52,7 +53,7 @@ def estimate_pose_and_filter_single(camData: CameraData, corners, ids, charucoBo
 
     ini_threshold += camData['threshold_stepper']
 
-  if ids is not None and corners.size > 0: # TODO : Try to remove the np reshaping
+  if ids.size > 0 and corners.size > 0: # TODO : Try to remove the np reshaping
     ids = ids.flatten()  # Flatten the IDs from 2D to 1D
     imgpoints2, _ = cv2.projectPoints(objpoints, rvec, tvec, camData['intrinsics'], camData['dist_coeff'])
     corners2 = corners.reshape(-1, 2)
@@ -64,14 +65,8 @@ def estimate_pose_and_filter_single(camData: CameraData, corners, ids, charucoBo
     valid_mask = errors <= threshold
     removed_mask = ~valid_mask
 
-    # Collect valid IDs in the original format (array of arrays)
     valid_ids = ids[valid_mask]
-    #filtered_ids.append(valid_ids.reshape(-1, 1).astype(np.int32))  # Reshape and store as array of arrays
 
-    # Collect data for valid points
-    #filtered_corners.append(corners2[valid_mask].reshape(-1, 1, 2))   # Collect valid corners for calibration
-
-    #removed_corners.extend(corners2[removed_mask])
     return corners2[valid_mask].reshape(-1, 1, 2), valid_ids.reshape(-1, 1).astype(np.int32), corners2[removed_mask]
 
 def detect_charuco_board(image: np.array, board: CharucoBoard):
@@ -115,16 +110,6 @@ def get_features(config: CalibrationConfig, camData: CameraData) -> CameraData:
 
   return camData
 
-def estimate_pose_and_filter(camData: CameraData, allCorners, allIds, charucoBoard):
-  filtered_corners = []
-  filtered_ids = []
-  for corners, ids in zip(allCorners, allIds):
-    corners, ids, _ = estimate_pose_and_filter_single(camData, corners, ids, charucoBoard)
-    filtered_corners.append(corners)
-    filtered_ids.append(ids)
-
-  return filtered_corners, filtered_ids
-
 def calibrate_charuco(camData: CameraData, allCorners, allIds, dataset: Dataset):
   # TODO : If we still need this check it needs to be elsewhere
   # if sum([len(corners) < 4 for corners in filteredCorners]) > 0.15 * len(filteredCorners):
@@ -135,11 +120,11 @@ def calibrate_charuco(camData: CameraData, allCorners, allIds, dataset: Dataset)
   
   # Convert to int32 from uint32 # TODO : Shouldn't be necessary
   for i, ids in enumerate(allIds): allIds[i] = ids.reshape(-1, 1).astype(np.int32)
-  
+
   # Filter for only images with >6 corners # TODO : Shouldn't be in here, should be in a separate necessary filtering function
   allCorners2 = []
   allIds2 = []
-  
+
   for corners, ids in zip(allCorners, allIds):
     if len(ids) < 6:
       continue
@@ -206,8 +191,7 @@ def calibrate_ccm_intrinsics_per_ccm(config: CalibrationConfig, camData: CameraD
   camData['reprojection_error'] = ret
   print("Reprojection error of {0}: {1}".format(
     camData['name'], ret))
-
-  return camData
+  return camData, filtered_corners, filtered_ids
 
 def calibrate_ccm_intrinsics(config: CalibrationConfig, camData: CameraData):
   imsize = camData['size']
@@ -850,8 +834,6 @@ def calibrate_fisheye(config: CalibrationConfig, allCorners, allIds, imsize, hfo
 
   return res, K, d, rvecs, tvecs, filtered_ids, filtered_corners
 
-def proxy_estimate_pose_and_filter_single(camData, corners, ids, dataset):
-  return estimate_pose_and_filter_single(camData, corners, ids, dataset.board.board)
 class StereoCalibration(object):
   """Class to Calculate Calibration and Rectify a Stereo Camera."""
 
@@ -912,12 +894,12 @@ class StereoCalibration(object):
         if camera_model== "fisheye":
           camData = pw.run(filter_features_fisheye, camData, allCorners, allIds) # TODO : Input types are wrong
         elif dataset.enableFiltering:
-          corners, ids = pw.map(proxy_estimate_pose_and_filter_single, camData, allCorners, allIds, dataset)[:2]
+          corners, ids = pw.map(estimate_pose_and_filter, camData, allCorners, allIds, dataset.board)[:2]
         else:
           corners, ids = allCorners, allIds
 
         camData = pw.run(calibrate_charuco, camData, corners, ids, dataset)
-        camData = pw.run(calibrate_ccm_intrinsics_per_ccm, config, camData, dataset)
+        camData, corners, ids = pw.run(calibrate_ccm_intrinsics_per_ccm, config, camData, dataset)[:3]
         camInfos[dataset.id] = camData
         filteredCharucos[dataset.id] = [corners, ids]
       else:
@@ -966,6 +948,9 @@ class StereoCalibration(object):
     for stereoConfig in stereoConfigs:
       if stereoConfig.ret():
         board_config['stereo_config'].update(stereoConfig.ret())
+
+    for key in filteredCharucos.keys():
+      filteredCharucos[key] = [e.ret() for e in filteredCharucos[key]]
 
     if debug:
       return [s.ret() for s in stereoConfigs], [e.ret() for e in allExtrinsics], board_config, {k: v.ret() for k, v in camInfos.items()}, filteredCharucos
