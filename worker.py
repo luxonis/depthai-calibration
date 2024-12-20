@@ -9,22 +9,26 @@ import ast
 
 T = TypeVar('T')
 
+
 def allArgs(args, kwargs):
   for arg in args:
     yield arg
   for kwarg in kwargs.values():
     yield kwarg
 
+
 class Retvals(Generic[T]):
+
   def __init__(self, taskOrGroup: 'ParallelTask', key: slice | tuple | int):
     self._taskOrGroup = taskOrGroup
     self._key = key
 
-  def __iter__(self) -> T: # Allow iterating over slice or list retvals
+  def __iter__(self) -> T:  # Allow iterating over slice or list retvals
     if isinstance(self._key, slice):
       if not self._key.stop:
         raise RuntimeError('Cannot iterate over an unknown length Retvals')
-      for i in range(self._key.start or 0, self._key.stop, self._key.step or 1):
+      for i in range(self._key.start or 0, self._key.stop, self._key.step
+                     or 1):
         yield Retvals(self._taskOrGroup, i)
     elif isinstance(self._key, list | tuple):
       for i in self._key:
@@ -44,7 +48,9 @@ class Retvals(Generic[T]):
   def finished(self) -> bool:
     return self._taskOrGroup.finished()
 
+
 class ParallelTask(Generic[T]):
+
   def __init__(self, worker: 'ParallelWorker', fun, args, kwargs):
     self._worker = worker
     self._fun = fun
@@ -62,12 +68,14 @@ class ParallelTask(Generic[T]):
     return f'<Task {self._fun} {self._id}>'
 
   def resolveArguments(self) -> None:
+
     def _replace(args):
       for arg in args:
         if isinstance(arg, ParallelTask | ParallelTaskGroup | Retvals):
           yield arg.ret()
         else:
           yield arg
+
     self._args = list(_replace(self._args))
     for key, value in self._kwargs:
       if isinstance(value, ParallelTask | ParallelTaskGroup | Retvals):
@@ -75,7 +83,8 @@ class ParallelTask(Generic[T]):
 
   def isExecutable(self) -> bool:
     for arg in allArgs(self._args, self._kwargs):
-      if isinstance(arg, ParallelTask | ParallelTaskGroup | Retvals) and not arg.finished():
+      if isinstance(arg, ParallelTask | ParallelTaskGroup
+                    | Retvals) and not arg.finished():
         return False
     return True
 
@@ -93,7 +102,9 @@ class ParallelTask(Generic[T]):
   def ret(self) -> T | None:
     return self._ret
 
+
 class ParallelTaskGroup(Generic[T]):
+
   def __init__(self, fun, args, kwargs):
     self._fun = fun
     self._args = args
@@ -122,21 +133,26 @@ class ParallelTaskGroup(Generic[T]):
     for arg in allArgs(self._args, self._kwargs):
       if isinstance(arg, ParallelTask | Retvals):
         arg = arg.ret()
-      if isinstance(arg, abc.Sized) and not isinstance(arg, str | bytes | dict):
+      if isinstance(arg,
+                    abc.Sized) and not isinstance(arg, str | bytes | dict):
         nTasks = max(nTasks, len(arg))
     self._tasks = []
     for arg in allArgs(self._args, self._kwargs):
       if isinstance(arg, abc.Sized) and len(arg) != nTasks:
-        raise RuntimeError('All sized arguments must have the same length or 1')
-    
+        raise RuntimeError(
+            'All sized arguments must have the same length or 1')
+
     def argsAtI(i: int):
       for arg in self._args:
         if isinstance(arg, list):
           yield arg[i]
-        elif isinstance(arg, ParallelTask | Retvals) and isinstance(arg.ret(), abc.Iterable) and not isinstance(arg.ret(), (str, bytes, dict)):
+        elif isinstance(arg, ParallelTask | Retvals) and isinstance(
+            arg.ret(),
+            abc.Iterable) and not isinstance(arg.ret(), (str, bytes, dict)):
           yield arg.ret()[i]
         else:
           yield arg
+
     def kwargsAtI(i: int):
       newKwargs = {}
       for key, value in self._kwargs:
@@ -152,7 +168,9 @@ class ParallelTaskGroup(Generic[T]):
     return self._tasks
 
   def ret(self) -> List[T | None]:
+
     def zip_retvals(tasks):
+
       def _iRet(i):
         for task in tasks:
           yield task.ret()[i]
@@ -169,11 +187,14 @@ class ParallelTaskGroup(Generic[T]):
 
   def isExecutable(self) -> bool:
     for arg in allArgs(self._args, self._kwargs):
-      if isinstance(arg, ParallelTask | ParallelTaskGroup | Retvals) and not arg.finished():
+      if isinstance(arg, ParallelTask | ParallelTaskGroup
+                    | Retvals) and not arg.finished():
         return False
     return True
 
-def worker_controller(_stop: multiprocess.Event, _in: multiprocess.Queue, _out: multiprocess.Queue, _wId: int) -> None:
+
+def worker_controller(_stop: multiprocess.Event, _in: multiprocess.Queue,
+                      _out: multiprocess.Queue, _wId: int) -> None:
   while not _stop.is_set():
     try:
       task: ParallelTask | None = _in.get(timeout=0.01)
@@ -189,7 +210,9 @@ def worker_controller(_stop: multiprocess.Event, _in: multiprocess.Queue, _out: 
     except:
       break
 
+
 class ParallelWorker:
+
   def __init__(self, workers: int = 16):
     self._workers = workers
     self._tasks: List[ParallelTask] = []
@@ -200,12 +223,14 @@ class ParallelWorker:
   def __exit__(self, exc_type, exc_value, exc_traceback):
     self.execute()
 
-  def run(self, fun: Callable[[Any], T], *args: Tuple[Any], **kwargs: Dict[str, Any]) -> ParallelTask[T]:
+  def run(self, fun: Callable[[Any], T], *args: Tuple[Any],
+          **kwargs: Dict[str, Any]) -> ParallelTask[T]:
     task = ParallelTask(self, fun, args, kwargs)
     self._tasks.append(task)
     return task
 
-  def map(self, fun: Callable[[Any], T], *args: Tuple[Iterable[Any]], **kwargs: Dict[str, Iterable[Any]]) -> ParallelTaskGroup[T]:
+  def map(self, fun: Callable[[Any], T], *args: Tuple[Iterable[Any]],
+          **kwargs: Dict[str, Iterable[Any]]) -> ParallelTaskGroup[T]:
     taskGroup = ParallelTaskGroup(fun, args, kwargs)
     self._tasks.append(taskGroup)
     return taskGroup
@@ -216,7 +241,8 @@ class ParallelWorker:
     stop = multiprocess.Event()
     processes = []
     for i in range(self._workers):
-      p = multiprocess.Process(target=worker_controller, args=(stop, workerIn, workerOut, i))
+      p = multiprocess.Process(target=worker_controller,
+                               args=(stop, workerIn, workerOut, i))
       processes.append(p)
       p.start()
 
@@ -243,13 +269,15 @@ class ParallelWorker:
           for task in doneTasks:
             if task._id == tId:
               if exc:
-                raise Exception(f'Calibration pipeline failed during \'{task}\'') from exc
+                raise Exception(
+                    f'Calibration pipeline failed during \'{task}\'') from exc
               task.finish(ret, exc)
               remaining -= 1
     finally:
       stop.set()
       for p in processes:
         p.join()
+
 
 class ParallelFunctionTransformer(ast.NodeTransformer):
   """AST Transformer for parsing ParallelFunctions and replacing calls to other parallel functions with pw.run(fun)"""
@@ -261,17 +289,10 @@ class ParallelFunctionTransformer(ast.NodeTransformer):
     """Finds all standalone expressions and converts them to __ParallelWorker_run__"""
     if isinstance(node.value, ast.Call):
       call_node = node.value
-      new_node = ast.Expr(
-        value=ast.Call(
+      new_node = ast.Expr(value=ast.Call(
           func=ast.Name(id='__ParallelWorker_run__', ctx=ast.Load()),
-          args=[
-            ast.Constant(0),
-            call_node.func,
-            *call_node.args
-          ],
-          keywords=call_node.keywords
-        )
-      )
+          args=[ast.Constant(0), call_node.func, *call_node.args],
+          keywords=call_node.keywords))
       ast.fix_missing_locations(new_node)
       return ast.copy_location(new_node, node)
     return node
@@ -284,7 +305,8 @@ class ParallelFunctionTransformer(ast.NodeTransformer):
     target_names = []
     for target in targets:
       if isinstance(target, ast.Tuple):
-        target_names.extend([elt.id for elt in target.elts if isinstance(elt, ast.Name)])
+        target_names.extend(
+            [elt.id for elt in target.elts if isinstance(elt, ast.Name)])
       elif isinstance(target, ast.Name):
         target_names.append(target.id)
 
@@ -292,17 +314,14 @@ class ParallelFunctionTransformer(ast.NodeTransformer):
     if isinstance(node.value, ast.Call):
       assign_call = node.value
       new_assign = ast.Assign(
-        targets=node.targets,
-        value=ast.Call(
-          func=ast.Name(id='__ParallelWorker_run__', ctx=ast.Load()),
-          args=[
-            ast.Constant(len(target_names)),
-            assign_call.func,
-            *assign_call.args
-          ],
-          keywords=assign_call.keywords
-        )
-      )
+          targets=node.targets,
+          value=ast.Call(func=ast.Name(id='__ParallelWorker_run__',
+                                       ctx=ast.Load()),
+                         args=[
+                             ast.Constant(len(target_names)), assign_call.func,
+                             *assign_call.args
+                         ],
+                         keywords=assign_call.keywords))
       ast.fix_missing_locations(new_assign)
       return new_assign
     return node
@@ -328,12 +347,13 @@ class ParallelFunctionTransformer(ast.NodeTransformer):
       match el:
         case ast.Expr():
           # Filter for only '.append' functions
-          if not isinstance(el.value, ast.Call) or el.value.func.attr != 'append':
+          if not isinstance(el.value,
+                            ast.Call) or el.value.func.attr != 'append':
             continue
           appending[el.value.args[0].id] = copy.deepcopy(el.value.func.value)
           appending[el.value.args[0].id].ctx = ast.Load()
         case ast.Assign():
-          if funName: # If there already was a function, then it can't be valid
+          if funName:  # If there already was a function, then it can't be valid
             funName = None
             break
           if not isinstance(el.value, ast.Call):
@@ -352,7 +372,9 @@ class ParallelFunctionTransformer(ast.NodeTransformer):
     argMap = {a: b for a, b in zip(itElNames, being_iterated)}
     assigns = [appending[a.id] for a in assigns if a.id in appending]
 
-    args =  [ast.Constant(len(assigns))] + [funName] + [argMap.get(a.id if isinstance(a, ast.Name) else 0, a) for a in args]
+    args = [ast.Constant(len(assigns))] + [funName] + [
+        argMap.get(a.id if isinstance(a, ast.Name) else 0, a) for a in args
+    ]
 
     for arg in args:
       arg.ctx = ast.Load()
@@ -364,39 +386,28 @@ class ParallelFunctionTransformer(ast.NodeTransformer):
 
     # Create the map call node and return it
     if len(assigns) != 1:
-      assigns = [ast.Tuple(
-        elts=assigns,
-        ctx=ast.Store()
-      )]
+      assigns = [ast.Tuple(elts=assigns, ctx=ast.Store())]
 
-    workerMap = ast.Assign(
-      targets=assigns,
-      value=ast.Call(
-        func=ast.Name(id="__ParallelWorker_map__", ctx=ast.Load()),
-        args=args,
-        keywords=[]
-      )
-    )
+    workerMap = ast.Assign(targets=assigns,
+                           value=ast.Call(func=ast.Name(
+                               id="__ParallelWorker_map__", ctx=ast.Load()),
+                                          args=args,
+                                          keywords=[]))
 
-    if_condition=ast.Call(
-      func=ast.Name(id="isinstance", ctx=ast.Load()),
-      args=[
-        funName,
-        ast.Name(id="ParallelFunction", ctx=ast.Load())
-      ],
-      keywords=[]
-    )
-    if_node = ast.If(
-      test=if_condition,
-      body=[workerMap],
-      orelse=[node]
-    )
+    if_condition = ast.Call(
+        func=ast.Name(id="isinstance", ctx=ast.Load()),
+        args=[funName,
+              ast.Name(id="ParallelFunction", ctx=ast.Load())],
+        keywords=[])
+    if_node = ast.If(test=if_condition, body=[workerMap], orelse=[node])
 
     ast.fix_missing_locations(if_node)
     return if_node
 
+
 class ParallelFunction:
   """Decorator for a parallel function"""
+
   def __init__(self, fun):
     self._fun = fun
 
@@ -421,7 +432,7 @@ class ParallelFunction:
 
     # Execute all parallel functions
     pw.execute()
-    
+
     # Unwind and replace retvals
     def replace_retvals(el):
       if isinstance(el, Retvals):
@@ -433,12 +444,13 @@ class ParallelFunction:
       elif isinstance(el, tuple):
         return tuple(map(replace_retvals, el))
       return el
-    
+
     return replace_retvals(ret)
 
   def _convert_to_pw(self, pw: ParallelWorker):
     source_lines = inspect.getsourcelines(self._fun)[0]
-    source = ''.join([line for line in source_lines if not line.startswith('@')])
+    source = ''.join(
+        [line for line in source_lines if not line.startswith('@')])
 
     tree = ast.parse(source)
 
@@ -469,14 +481,19 @@ class ParallelFunction:
           return retvals[:nret]
         return retvals
       return fun(*args)
-    
+
     # Inject __ParallelWorker... definitions
-    func_globals = {**func_globals, '__ParallelWorker_run__': worker_run, '__ParallelWorker_map__': worker_map}
+    func_globals = {
+        **func_globals, '__ParallelWorker_run__': worker_run,
+        '__ParallelWorker_map__': worker_map
+    }
     exec(compiled_code, func_globals)
 
     return func_globals
 
+
 T = TypeVar("T")
+
 
 def parallel_function(fun: T) -> T:
   return ParallelFunction(fun)
