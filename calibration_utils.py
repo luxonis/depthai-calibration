@@ -1227,27 +1227,19 @@ class StereoCalibration(object):
     for dataset in intrinsicCameras:
       for socket in board_config['cameras']:
         if board_config['cameras'][socket]['name'] == dataset.name:
-          #board_config['cameras'][socket] = camInfos[dataset.id].ret()
           board_config['cameras'][socket] = camInfos[dataset.id]
 
     for left, _ in extrinsicPairs:
       for socket in board_config['cameras']:
         if board_config['cameras'][socket]['name'] == left.name:
-          #board_config['cameras'][socket]['extrinsics'] = camInfos[left.id].ret()['extrinsics']
           board_config['cameras'][socket]['extrinsics'] = camInfos[
               left.id]['extrinsics']
 
     for stereoConfig in stereoConfigs:
-      #if stereoConfig.ret():
-      #  board_config['stereo_config'].update(stereoConfig.ret())
       if stereoConfig:
         board_config['stereo_config'].update(stereoConfig)
 
-    #for key in filteredCharucos.keys():
-    #filteredCharucos[key] = [e.ret() for e in filteredCharucos[key]]
-
     if debug:
-      #return [s.ret() for s in stereoConfigs], [e.ret() for e in allExtrinsics], board_config, {k: v.ret() for k, v in camInfos.items()}, filteredCharucos
       return stereoConfigs, allExtrinsics, board_config, camInfos, filteredCharucos
 
     return board_config, filteredCharucos
