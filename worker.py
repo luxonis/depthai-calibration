@@ -18,6 +18,7 @@ def allArgs(args, kwargs):
 
 
 class Retvals(Generic[T]):
+  """Representation of a value yet to be returned by a worker"""
 
   def __init__(self, taskOrGroup: 'ParallelTask', key: slice | tuple | int):
     self._taskOrGroup = taskOrGroup
@@ -40,12 +41,14 @@ class Retvals(Generic[T]):
     return f'<Retvals of {self._taskOrGroup}>'
 
   def ret(self) -> T:
+    """Retrieve the value returned by the worker"""
     if isinstance(self._key, list | tuple):
       ret = self._taskOrGroup.ret()
       return [ret[i] for i in self._key]
     return self._taskOrGroup.ret()[self._key]
 
   def finished(self) -> bool:
+    """Check if the worker has finished"""
     return self._taskOrGroup.finished()
 
 
@@ -68,6 +71,7 @@ class ParallelTask(Generic[T]):
     return f'<Task {self._fun} {self._id}>'
 
   def resolveArguments(self) -> None:
+    """Convert all Retvals arguments into their underlying values"""
 
     def _replace(args):
       for arg in args:
@@ -82,6 +86,8 @@ class ParallelTask(Generic[T]):
         self._kwargs[key] = value.ret()
 
   def isExecutable(self) -> bool:
+    """Check if all tasks on which this task dependes have finished"""
+
     for arg in allArgs(self._args, self._kwargs):
       if isinstance(arg, ParallelTask | ParallelTaskGroup
                     | Retvals) and not arg.finished():
@@ -89,6 +95,8 @@ class ParallelTask(Generic[T]):
     return True
 
   def finished(self) -> bool:
+    """Check if this task has finished"""
+
     return self._finished
 
   def finish(self, ret, exc) -> None:
@@ -97,9 +105,11 @@ class ParallelTask(Generic[T]):
     self._finished = True
 
   def exc(self) -> BaseException | None:
+    """Retrieve an exception, if it occured, otherwise None"""
     return self._exc
 
   def ret(self) -> T | None:
+    """Retrieve the return value"""
     return self._ret
 
 
@@ -118,6 +128,8 @@ class ParallelTaskGroup(Generic[T]):
     return f'<TaskGroup {self._fun}>'
 
   def finished(self) -> bool:
+    """Check if all tasks in the group have finished"""
+
     if not self._tasks:
       return False
     for task in self._tasks:
@@ -126,9 +138,13 @@ class ParallelTaskGroup(Generic[T]):
     return True
 
   def exc(self) -> List[BaseException | None]:
+    """Retrieve any exceptions from the tasks of this group"""
+
     return list(map(lambda t: t.exc(), self._tasks))
 
   def tasks(self) -> List[ParallelTask]:
+    """Retrieve the tasks which make up this task group"""
+
     nTasks = 1
     for arg in allArgs(self._args, self._kwargs):
       if isinstance(arg, ParallelTask | Retvals):
@@ -168,6 +184,7 @@ class ParallelTaskGroup(Generic[T]):
     return self._tasks
 
   def ret(self) -> List[T | None]:
+    """Retrieve the return value of all tasks in the group as a single list"""
 
     def zip_retvals(tasks):
 
@@ -186,6 +203,7 @@ class ParallelTaskGroup(Generic[T]):
     return list(zip_retvals(self._tasks))
 
   def isExecutable(self) -> bool:
+    """Check if all dependency tasks have finished"""
     for arg in allArgs(self._args, self._kwargs):
       if isinstance(arg, ParallelTask | ParallelTaskGroup
                     | Retvals) and not arg.finished():
