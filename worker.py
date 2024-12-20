@@ -1,8 +1,11 @@
-from typing import Dict, Any, Callable, Iterable, Tuple, TypeVar, Generic, Sequence, List
+from typing import Dict, Any, Callable, Iterable, Tuple, TypeVar, Generic, List
 from collections import abc
-import multiprocessing
+import multiprocess
+import inspect
 import random
 import queue
+import copy
+import ast
 
 T = TypeVar('T')
 
@@ -170,7 +173,7 @@ class ParallelTaskGroup(Generic[T]):
         return False
     return True
 
-def worker_controller(_stop: multiprocessing.Event, _in: multiprocessing.Queue, _out: multiprocessing.Queue, _wId: int) -> None:
+def worker_controller(_stop: multiprocess.Event, _in: multiprocess.Queue, _out: multiprocess.Queue, _wId: int) -> None:
   while not _stop.is_set():
     try:
       task: ParallelTask | None = _in.get(timeout=0.01)
@@ -208,12 +211,12 @@ class ParallelWorker:
     return taskGroup
 
   def execute(self):
-    workerIn = multiprocessing.Manager().Queue()
-    workerOut = multiprocessing.Manager().Queue()
-    stop = multiprocessing.Event()
+    workerIn = multiprocess.Manager().Queue()
+    workerOut = multiprocess.Manager().Queue()
+    stop = multiprocess.Event()
     processes = []
     for i in range(self._workers):
-      p = multiprocessing.Process(target=worker_controller, args=(stop, workerIn, workerOut, i))
+      p = multiprocess.Process(target=worker_controller, args=(stop, workerIn, workerOut, i))
       processes.append(p)
       p.start()
 
@@ -247,3 +250,233 @@ class ParallelWorker:
       stop.set()
       for p in processes:
         p.join()
+
+class ParallelFunctionTransformer(ast.NodeTransformer):
+  """AST Transformer for parsing ParallelFunctions and replacing calls to other parallel functions with pw.run(fun)"""
+
+  def __init__(self, pw: ParallelWorker):
+    self._pw = pw
+
+  def visit_Expr(self, node):
+    """Finds all standalone expressions and converts them to __ParallelWorker_run__"""
+    if isinstance(node.value, ast.Call):
+      call_node = node.value
+      new_node = ast.Expr(
+        value=ast.Call(
+          func=ast.Name(id='__ParallelWorker_run__', ctx=ast.Load()),
+          args=[
+            ast.Constant(0),
+            call_node.func,
+            *call_node.args
+          ],
+          keywords=call_node.keywords
+        )
+      )
+      ast.fix_missing_locations(new_node)
+      return ast.copy_location(new_node, node)
+    return node
+
+  def visit_Assign(self, node):
+    """
+    Finds all assignments and converts them to __ParallelWorker_run__
+    """
+    targets = node.targets
+    target_names = []
+    for target in targets:
+      if isinstance(target, ast.Tuple):
+        target_names.extend([elt.id for elt in target.elts if isinstance(elt, ast.Name)])
+      elif isinstance(target, ast.Name):
+        target_names.append(target.id)
+
+    # Modify the assignment to include print calls
+    if isinstance(node.value, ast.Call):
+      assign_call = node.value
+      new_assign = ast.Assign(
+        targets=node.targets,
+        value=ast.Call(
+          func=ast.Name(id='__ParallelWorker_run__', ctx=ast.Load()),
+          args=[
+            ast.Constant(len(target_names)),
+            assign_call.func,
+            *assign_call.args
+          ],
+          keywords=assign_call.keywords
+        )
+      )
+      ast.fix_missing_locations(new_assign)
+      return new_assign
+    return node
+
+  def visit_For(self, node: ast.For):
+    """
+    Finds all for loops that append to arrays, converting them to __ParallelWorker_map__
+    """
+    if isinstance(node.iter, ast.Name):
+      being_iterated = copy.deepcopy([node.iter])
+    else:
+      being_iterated = copy.deepcopy(node.iter.args)
+
+    if isinstance(node.target, ast.Name):
+      itElNames = [node.target.id]
+    else:
+      itElNames = [n.id for n in node.target.elts]
+
+    appending = {}
+    funName = None
+
+    for el in node.body:
+      match el:
+        case ast.Expr():
+          # Filter for only '.append' functions
+          if not isinstance(el.value, ast.Call) or el.value.func.attr != 'append':
+            continue
+          appending[el.value.args[0].id] = copy.deepcopy(el.value.func.value)
+          appending[el.value.args[0].id].ctx = ast.Load()
+        case ast.Assign():
+          if funName: # If there already was a function, then it can't be valid
+            funName = None
+            break
+          if not isinstance(el.value, ast.Call):
+            continue
+          funName = copy.deepcopy(el.value.func)
+          args = copy.deepcopy(el.value.args)
+          if isinstance(el.targets[0], ast.Name):
+            assigns = el.targets[0]
+          else:
+            assigns = el.targets[0].elts
+
+    # If the signature doesn't match at all then skip
+    if not appending or not funName or len(node.body) > 10:
+      return self.generic_visit(node)
+
+    argMap = {a: b for a, b in zip(itElNames, being_iterated)}
+    assigns = [appending[a.id] for a in assigns if a.id in appending]
+
+    args =  [ast.Constant(len(assigns))] + [funName] + [argMap.get(a.id if isinstance(a, ast.Name) else 0, a) for a in args]
+
+    for arg in args:
+      arg.ctx = ast.Load()
+
+    for assign in assigns:
+      assign.ctx = ast.Store()
+
+    funName.ctx = ast.Load()
+
+    # Create the map call node and return it
+    if len(assigns) != 1:
+      assigns = [ast.Tuple(
+        elts=assigns,
+        ctx=ast.Store()
+      )]
+
+    workerMap = ast.Assign(
+      targets=assigns,
+      value=ast.Call(
+        func=ast.Name(id="__ParallelWorker_map__", ctx=ast.Load()),
+        args=args,
+        keywords=[]
+      )
+    )
+
+    if_condition=ast.Call(
+      func=ast.Name(id="isinstance", ctx=ast.Load()),
+      args=[
+        funName,
+        ast.Name(id="ParallelFunction", ctx=ast.Load())
+      ],
+      keywords=[]
+    )
+    if_node = ast.If(
+      test=if_condition,
+      body=[workerMap],
+      orelse=[node]
+    )
+
+    ast.fix_missing_locations(if_node)
+    return if_node
+
+class ParallelFunction:
+  """Decorator for a parallel function"""
+  def __init__(self, fun):
+    self._fun = fun
+
+  def __call__(self, *args, **kwargs):
+    return self._fun(*args, **kwargs)
+
+  @staticmethod
+  def _run_function(fun, *args, **kwargs):
+    return fun(*args, **kwargs)
+
+  def run_parallel(self, workers: int = 8, *args, **kwargs):
+    """Run the function in parallel
+
+    Args:
+        workers (int, optional): Number of worker processes to use. Defaults to 8.
+    """
+    pw = ParallelWorker(workers)
+
+    # Recurse through the function and find all parallelizable functions
+    func_globals = self._convert_to_pw(pw)
+    ret = func_globals[self._fun.__name__](*args, **kwargs)
+
+    # Execute all parallel functions
+    pw.execute()
+    
+    # Unwind and replace retvals
+    def replace_retvals(el):
+      if isinstance(el, Retvals):
+        return el.ret()
+      elif isinstance(el, dict):
+        return {k: replace_retvals(v) for k, v in el.items()}
+      elif isinstance(el, list):
+        return list(map(replace_retvals, el))
+      elif isinstance(el, tuple):
+        return tuple(map(replace_retvals, el))
+      return el
+    
+    return replace_retvals(ret)
+
+  def _convert_to_pw(self, pw: ParallelWorker):
+    source_lines = inspect.getsourcelines(self._fun)[0]
+    source = ''.join([line for line in source_lines if not line.startswith('@')])
+
+    tree = ast.parse(source)
+
+    # Walk the parsed AST and add calls to ParallelWorkers
+    transformer = ParallelFunctionTransformer(pw)
+    transformed_tree = transformer.visit(tree)
+
+    ast.fix_missing_locations(transformed_tree)
+
+    # Recompile to bytecode
+    compiled_code = compile(transformed_tree, filename="<ast>", mode="exec")
+    func_globals = self._fun.__globals__.copy()
+
+    def worker_run(nret, fun, *args):
+      # Check whether it's a parallel function, otherwise treat it normally
+      if isinstance(fun, ParallelFunction):
+        retvals = pw.run(fun, *args)
+        if nret > 1:
+          return retvals[:nret]
+        return retvals
+      return fun(*args)
+
+    def worker_map(nret, fun, *args):
+      # Check whether it's a parallel function, otherwise treat it normally
+      if isinstance(fun, ParallelFunction):
+        retvals = pw.map(fun, *args)
+        if nret > 1:
+          return retvals[:nret]
+        return retvals
+      return fun(*args)
+    
+    # Inject __ParallelWorker... definitions
+    func_globals = {**func_globals, '__ParallelWorker_run__': worker_run, '__ParallelWorker_map__': worker_map}
+    exec(compiled_code, func_globals)
+
+    return func_globals
+
+T = TypeVar("T")
+
+def parallel_function(fun: T) -> T:
+  return ParallelFunction(fun)

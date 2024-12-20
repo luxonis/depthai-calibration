@@ -1,5 +1,5 @@
 from scipy.spatial.transform import Rotation
-from .worker import ParallelWorker
+from .worker import parallel_function
 from typing import List, Tuple
 from itertools import chain
 from .types import *
@@ -24,6 +24,7 @@ class StereoExceptions(Exception):
     """
     return f"'{self.args[0]}' (occured during stage '{self.stage}')"
 
+@parallel_function
 def estimate_pose_and_filter(camData: CameraData, corners, ids, charucoBoard: CharucoBoard):
   """Very rough corner filtering on a single image"""
 
@@ -69,6 +70,7 @@ def estimate_pose_and_filter(camData: CameraData, corners, ids, charucoBoard: Ch
 
     return corners2[valid_mask].reshape(-1, 1, 2), valid_ids.reshape(-1, 1).astype(np.int32), corners2[removed_mask]
 
+@parallel_function
 def detect_charuco_board(image: np.array, board: CharucoBoard):
   arucoParams = cv2.aruco.DetectorParameters_create()
   arucoParams.minMarkerDistanceRate = 0.01
@@ -88,6 +90,7 @@ def detect_charuco_board(image: np.array, board: CharucoBoard):
   else:
     raise RuntimeError('Failed to detect corners on image')
 
+@parallel_function
 def get_features(config: CalibrationConfig, camData: CameraData) -> CameraData:
   f = camData['size'][0] / (2 * np.tan(np.deg2rad(camData["hfov"]/2)))
 
@@ -110,6 +113,7 @@ def get_features(config: CalibrationConfig, camData: CameraData) -> CameraData:
 
   return camData
 
+@parallel_function
 def calibrate_charuco(camData: CameraData, allCorners, allIds, dataset: Dataset):
   # TODO : If we still need this check it needs to be elsewhere
   # if sum([len(corners) < 4 for corners in filteredCorners]) > 0.15 * len(filteredCorners):
@@ -153,6 +157,7 @@ def calibrate_charuco(camData: CameraData, allCorners, allIds, dataset: Dataset)
   camData['filtered_ids'] = allIds2
   return camData
 
+@parallel_function
 def filter_features_fisheye(camData: CameraData, intrinsic_img, all_features, all_ids):
   f = camData['size'][0] / (2 * np.tan(np.deg2rad(camData["hfov"]/2)))
   print("INTRINSIC CALIBRATION")
@@ -178,6 +183,7 @@ def filter_features_fisheye(camData: CameraData, intrinsic_img, all_features, al
 
   return camData
 
+@parallel_function
 def calibrate_ccm_intrinsics_per_ccm(config: CalibrationConfig, camData: CameraData, dataset: Dataset):
   start = time.time()
   print('starting calibrate_wf')
@@ -233,6 +239,7 @@ def calibrate_ccm_intrinsics(config: CalibrationConfig, camData: CameraData):
 
   return camData
 
+@parallel_function
 def calibrate_stereo_perspective(config: CalibrationConfig, obj_pts, allLeftCorners, allRightCorners, leftCamData: CameraData, rightCamData: CameraData):
   cameraMatrix_l, distCoeff_l, cameraMatrix_r, distCoeff_r, left_distortion_model = leftCamData['intrinsics'], leftCamData['dist_coeff'], rightCamData['intrinsics'], rightCamData['dist_coeff'], leftCamData['distortion_model']
   specTranslation = leftCamData['extrinsics']['specTranslation']
@@ -275,6 +282,7 @@ def calibrate_stereo_perspective(config: CalibrationConfig, obj_pts, allLeftCorn
 
   return [ret, R, T, R_l, R_r, P_l, P_r]
 
+@parallel_function
 def calibrate_stereo_perspective_per_ccm(config: CalibrationConfig, obj_pts, left_corners_sampled, right_corners_sampled, left_cam_info, right_cam_info):
   cameraMatrix_l, distCoeff_l, cameraMatrix_r, distCoeff_r = left_cam_info['intrinsics'], left_cam_info['dist_coeff'], right_cam_info['intrinsics'], right_cam_info['dist_coeff']
   specTranslation = left_cam_info['extrinsics']['specTranslation']
@@ -314,6 +322,7 @@ def calibrate_stereo_perspective_per_ccm(config: CalibrationConfig, obj_pts, lef
   # print(f'P_r is \n {P_r}')
   return [ret, R, T, R_l, R_r, P_l, P_r]
 
+@parallel_function
 def calibrate_stereo_fisheye(config: CalibrationConfig, obj_pts, left_corners_sampled, right_corners_sampled, left_cam_info, right_cam_info):
   cameraMatrix_l, distCoeff_l, cameraMatrix_r, distCoeff_r = left_cam_info['intrinsics'], left_cam_info['dist_coeff'], right_cam_info['intrinsics'], right_cam_info['dist_coeff']
   # make sure all images have the same *number of* points
@@ -355,6 +364,7 @@ def calibrate_stereo_fisheye(config: CalibrationConfig, obj_pts, left_corners_sa
 
   return [ret, R, T, R_l, R_r, P_l, P_r]
 
+@parallel_function
 def find_stereo_common_features(leftCorners, leftIds, rightCorners, rightIds, board: CharucoBoard):
   left_corners_sampled = []
   right_corners_sampled = []
@@ -379,12 +389,15 @@ def find_stereo_common_features(leftCorners, leftIds, rightCorners, rightIds, bo
 
   return left_corners_sampled, right_corners_sampled, obj_pts
 
+@parallel_function
 def undistort_points_perspective(allCorners, camInfo):
   return [cv2.undistortPoints(np.array(corners), camInfo['intrinsics'], camInfo['dist_coeff'], P=camInfo['intrinsics']) for corners in allCorners]
 
+@parallel_function
 def undistort_points_fisheye(allCorners, camInfo):
   return [cv2.fisheye.undistortPoints(np.array(corners), camInfo['intrinsics'], camInfo['dist_coeff'], P=camInfo['intrinsics']) for corners in allCorners]
 
+@parallel_function
 def calculate_epipolar_error(left_cam_info: CameraData, right_cam_info: CameraData, left_cam: Dataset, right_cam: Dataset, board_config, extrinsics):
   if extrinsics[0] == -1:
     return -1, extrinsics[1]
@@ -757,6 +770,7 @@ def calibrate_camera_charuco(allCorners, allIds, imsize, distortion_flags, camer
       #previous_ids = removed_ids
   return ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, filtered_ids, filtered_corners, allCorners, allIds
 
+@parallel_function
 def calibrate_fisheye(config: CalibrationConfig, allCorners, allIds, imsize, hfov, name):
   f_init = imsize[0]/np.deg2rad(hfov)*1.15
 
@@ -834,6 +848,102 @@ def calibrate_fisheye(config: CalibrationConfig, allCorners, allIds, imsize, hfo
 
   return res, K, d, rvecs, tvecs, filtered_ids, filtered_corners
 
+@parallel_function
+def calibrate_camera(config, board_config, camera_model, intrinsicCameras: List[Dataset] = [], extrinsicPairs: List[Tuple[Dataset, Dataset]] = []):
+  camInfos = {}
+  stereoConfigs = []
+  allExtrinsics = []
+  filteredCharucos = {}
+
+  # Compile a list of unique datasets
+  uniqueDatasets = intrinsicCameras
+  for dataset in chain(*extrinsicPairs):
+    if dataset not in uniqueDatasets:
+      uniqueDatasets.append(dataset)
+
+  # Calibrate camera intrinsics for all provided datasets
+  for dataset in uniqueDatasets:
+    camData: CameraData = [c for c in board_config['cameras'].values() if c['name'] == dataset.name][0]
+
+    if "calib_model" in camData and len(camData["calib_model"].split("_")) > 1:
+      cameraModel_ccm, model_ccm = camData["calib_model"].split("_")
+      if cameraModel_ccm == "fisheye":
+        model_ccm == None
+      calib_model = cameraModel_ccm
+      distortion_model = model_ccm
+    else:
+      calib_model = camera_model
+      distortion_model = DistortionModel.Tilted # Use the tilted model by default
+
+    camData['size'] = dataset.imageSize
+    camData['calib_model'] = calib_model
+    camData['distortion_model'] = distortion_model
+
+    if len(dataset.allCorners) and len(dataset.allIds):
+      allCorners, allIds = dataset.allCorners, dataset.allIds
+    elif len(dataset.images):
+      #allCorners, allIds = detect_charuco_board(list(dataset.images), dataset.board)
+      
+      allCorners, allids = [], []
+      for image in list(dataset.images):
+        corners, ids = detect_charuco_board(image, dataset.board)
+        allCorners.append(corners)
+        allIds.append(ids)
+    else:
+      raise RuntimeError(f'Dataset \'{dataset.name}\' doesn\'t contain corners or images')
+
+    if PER_CCM:
+      camData = get_features(config, camData)
+      if camera_model== "fisheye":
+        camData = filter_features_fisheye(camData, allCorners, allIds) # TODO : Input types are wrong
+      elif dataset.enableFiltering:
+        filteredCorners, filteredIds = [], []
+        for corners, ids in zip(allCorners, allIds):
+          corners, ids, _ = estimate_pose_and_filter(camData, corners, ids, dataset.board)
+          filteredCorners.append(corners)
+          filteredIds.append(ids)
+        corners, ids = filteredCorners, filteredIds
+
+        #corners, ids = estimate_pose_and_filter(camData, allCorners, allIds, dataset.board)
+      else:
+        corners, ids = allCorners, allIds
+
+      camData = calibrate_charuco(camData, corners, ids, dataset)
+      camData, corners, ids = calibrate_ccm_intrinsics_per_ccm(config, camData, dataset)
+      camInfos[dataset.id] = camData
+      filteredCharucos[dataset.id] = [corners, ids]
+    else:
+      camData = calibrate_ccm_intrinsics(config, camData) # TODO : Not a parallel function
+
+  for left, right in extrinsicPairs:
+    left_cam_info = camInfos[left.id]
+    right_cam_info = camInfos[right.id]
+    leftCorners, leftIds = filteredCharucos[left.id]
+    rightCorners, rightIds = filteredCharucos[right.id]
+
+    left_corners_sampled, right_corners_sampled, obj_pts= find_stereo_common_features(leftCorners, leftIds, rightCorners, rightIds, left.board)
+
+    if PER_CCM and EXTRINSICS_PER_CCM:
+      if left_cam_info['calib_model'] == "perspective":
+        left_corners_sampled = undistort_points_perspective(left_corners_sampled, left_cam_info)
+        right_corners_sampled = undistort_points_perspective(right_corners_sampled, right_cam_info)
+      else:
+        left_corners_sampled = undistort_points_fisheye(left_corners_sampled, left_cam_info)
+        right_corners_sampled = undistort_points_fisheye(right_corners_sampled, right_cam_info)
+
+      extrinsics = calibrate_stereo_perspective_per_ccm(config, obj_pts, left_corners_sampled, right_corners_sampled, left_cam_info, right_cam_info)
+    else:
+      if camera_model == 'perspective':
+        extrinsics = calibrate_stereo_perspective(config, obj_pts, left_corners_sampled, right_corners_sampled, left_cam_info, right_cam_info)
+      elif camera_model == 'fisheye':
+        extrinsics = calibrate_stereo_fisheye(config, obj_pts, left_corners_sampled, right_corners_sampled, left_cam_info, right_cam_info)
+    left_cam_info, stereo_config = calculate_epipolar_error(left_cam_info, right_cam_info, left, right, board_config, extrinsics)
+    allExtrinsics.append(extrinsics)
+    camInfos[left.id] = left_cam_info
+    stereoConfigs.append(stereo_config)
+
+  return board_config, filteredCharucos, allExtrinsics, camInfos, stereoConfigs
+
 class StereoCalibration(object):
   """Class to Calculate Calibration and Rectify a Stereo Camera."""
 
@@ -852,107 +962,33 @@ class StereoCalibration(object):
         print('Extrinsic pair has different dataset board')
         raise RuntimeError('Extrinsic pair has different dataset board')
 
-    pw = ParallelWorker(10)
-    camInfos = {}
-    stereoConfigs = []
-    allExtrinsics = []
-    filteredCharucos = {}
-
-    # Compile a list of unique datasets
-    uniqueDatasets = intrinsicCameras
-    for dataset in chain(*extrinsicPairs):
-      if dataset not in uniqueDatasets:
-        uniqueDatasets.append(dataset)
-
-    # Calibrate camera intrinsics for all provided datasets
-    for dataset in uniqueDatasets:
-      camData = [c for c in board_config['cameras'].values() if c['name'] == dataset.name][0]
-
-      if "calib_model" in camData and len(camData["calib_model"].split("_")) > 1:
-        cameraModel_ccm, model_ccm = camData["calib_model"].split("_")
-        if cameraModel_ccm == "fisheye":
-          model_ccm == None
-        calib_model = cameraModel_ccm
-        distortion_model = model_ccm
-      else:
-        calib_model = camera_model
-        distortion_model = DistortionModel.Tilted # Use the tilted model by default
-
-      camData['size'] = dataset.imageSize
-      camData['calib_model'] = calib_model
-      camData['distortion_model'] = distortion_model
-
-      if len(dataset.allCorners) and len(dataset.allIds):
-        allCorners, allIds = dataset.allCorners, dataset.allIds
-      elif len(dataset.images):
-        allCorners, allIds = pw.map(detect_charuco_board, list(dataset.images), dataset.board)[:2]
-      else:
-        raise RuntimeError(f'Dataset \'{dataset.name}\' doesn\'t contain corners or images')
-
-      if PER_CCM:
-        camData = pw.run(get_features, config, camData)
-        if camera_model== "fisheye":
-          camData = pw.run(filter_features_fisheye, camData, allCorners, allIds) # TODO : Input types are wrong
-        elif dataset.enableFiltering:
-          corners, ids = pw.map(estimate_pose_and_filter, camData, allCorners, allIds, dataset.board)[:2]
-        else:
-          corners, ids = allCorners, allIds
-
-        camData = pw.run(calibrate_charuco, camData, corners, ids, dataset)
-        camData, corners, ids = pw.run(calibrate_ccm_intrinsics_per_ccm, config, camData, dataset)[:3]
-        camInfos[dataset.id] = camData
-        filteredCharucos[dataset.id] = [corners, ids]
-      else:
-        camData = calibrate_ccm_intrinsics(config, camData)
-
-    for left, right in extrinsicPairs:
-      left_cam_info = camInfos[left.id]
-      right_cam_info = camInfos[right.id]
-      leftCorners, leftIds = filteredCharucos[left.id]
-      rightCorners, rightIds = filteredCharucos[right.id]
-
-      left_corners_sampled, right_corners_sampled, obj_pts= pw.run(find_stereo_common_features, leftCorners, leftIds, rightCorners, rightIds, left.board)[:3]
-
-      if PER_CCM and EXTRINSICS_PER_CCM:
-        if left_cam_info['calib_model'] == "perspective":
-          left_corners_sampled = pw.run(undistort_points_perspective, left_corners_sampled, left_cam_info)
-          right_corners_sampled = pw.run(undistort_points_perspective, right_corners_sampled, right_cam_info)
-        else:
-          left_corners_sampled = pw.run(undistort_points_fisheye, left_corners_sampled, left_cam_info)
-          right_corners_sampled = pw.run(undistort_points_fisheye, right_corners_sampled, right_cam_info)
-
-        extrinsics = pw.run(calibrate_stereo_perspective_per_ccm, config, obj_pts, left_corners_sampled, right_corners_sampled, left_cam_info, right_cam_info)
-      else:
-        if camera_model == 'perspective':
-          extrinsics = pw.run(calibrate_stereo_perspective, config, obj_pts, left_corners_sampled, right_corners_sampled, left_cam_info, right_cam_info)
-        elif camera_model == 'fisheye':
-          extrinsics = pw.run(calibrate_stereo_fisheye, config, obj_pts, left_corners_sampled, right_corners_sampled, left_cam_info, right_cam_info)
-      left_cam_info, stereo_config = pw.run(calculate_epipolar_error, left_cam_info, right_cam_info, left, right, board_config, extrinsics)[:2]
-      allExtrinsics.append(extrinsics)
-      camInfos[left.id] = left_cam_info
-      stereoConfigs.append(stereo_config)
-
-    pw.execute()
+    #board_config, filteredCharucos, allExtrinsics, camInfos, stereoConfigs = calibrate_camera.run_parallel(10, config, board_config, camera_model, intrinsicCameras, extrinsicPairs)
+    board_config, filteredCharucos, allExtrinsics, camInfos, stereoConfigs = calibrate_camera.run_parallel(10, config, board_config, camera_model, intrinsicCameras, extrinsicPairs)
 
     # Construct board config from calibrated cam infos
     for dataset in intrinsicCameras:
       for socket in board_config['cameras']:
         if board_config['cameras'][socket]['name'] == dataset.name:
-          board_config['cameras'][socket] = camInfos[dataset.id].ret()
+          #board_config['cameras'][socket] = camInfos[dataset.id].ret()
+          board_config['cameras'][socket] = camInfos[dataset.id]
 
     for left, _ in extrinsicPairs:
       for socket in board_config['cameras']:
         if board_config['cameras'][socket]['name'] == left.name:
-          board_config['cameras'][socket]['extrinsics'] = camInfos[left.id].ret()['extrinsics']
+          #board_config['cameras'][socket]['extrinsics'] = camInfos[left.id].ret()['extrinsics']
+          board_config['cameras'][socket]['extrinsics'] = camInfos[left.id]['extrinsics']
 
     for stereoConfig in stereoConfigs:
-      if stereoConfig.ret():
-        board_config['stereo_config'].update(stereoConfig.ret())
+      #if stereoConfig.ret():
+      #  board_config['stereo_config'].update(stereoConfig.ret())
+      if stereoConfig:
+        board_config['stereo_config'].update(stereoConfig)
 
-    for key in filteredCharucos.keys():
-      filteredCharucos[key] = [e.ret() for e in filteredCharucos[key]]
+    #for key in filteredCharucos.keys():
+      #filteredCharucos[key] = [e.ret() for e in filteredCharucos[key]]
 
     if debug:
-      return [s.ret() for s in stereoConfigs], [e.ret() for e in allExtrinsics], board_config, {k: v.ret() for k, v in camInfos.items()}, filteredCharucos
+      #return [s.ret() for s in stereoConfigs], [e.ret() for e in allExtrinsics], board_config, {k: v.ret() for k, v in camInfos.items()}, filteredCharucos
+      return stereoConfigs, allExtrinsics, board_config, camInfos, filteredCharucos
 
     return board_config, filteredCharucos
