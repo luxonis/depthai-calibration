@@ -1,5 +1,5 @@
+from .worker import parallel_function, ParallelFunction
 from scipy.spatial.transform import Rotation
-from .worker import parallel_function
 from typing import List, Tuple
 from itertools import chain
 from .types import *
