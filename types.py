@@ -70,7 +70,7 @@ class Dataset:
 
     def at(self, key):
       if isinstance(self._images[key], str):
-        self._images[key] = cv2.imread(self._images[key], cv2.IMREAD_UNCHANGED)
+        self._images[key] = cv2.imread(self._images[key], cv2.IMREAD_GRAYSCALE)
       return self._images[key]
 
     def __len__(self):
