@@ -64,7 +64,7 @@ class CharucoBoard:
     return self._board
 
 class Dataset:
-  class Images:
+  class Images(list):
     def __init__(self, images: Iterable[np.ndarray | str]):
       self._images = list(images)
 
@@ -84,7 +84,7 @@ class Dataset:
       return self.at(key)
 
     def __repr__(self):
-      return self._images.__repr__()
+      return str(list(self))
 
   def __init__(self, name: str, board: CharucoBoard, images: List[np.ndarray | str] = [], allCorners: List[np.ndarray] = [], allIds: List[np.ndarray] = [], imageSize: Tuple[float, float] = (), enableFiltering: bool = True):
     """Create a dataset for camera calibration
