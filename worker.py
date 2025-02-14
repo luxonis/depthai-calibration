@@ -1,10 +1,11 @@
 from typing import Dict, Any, Callable, Iterable, Tuple, TypeVar, Generic, List
 from collections import abc
-import multiprocess
+import multiprocessing
 import inspect
 import random
 import queue
 import copy
+import dill
 import ast
 
 T = TypeVar('T')
@@ -211,18 +212,18 @@ class ParallelTaskGroup(Generic[T]):
     return True
 
 
-def worker_controller(_stop: multiprocess.Event, _in: multiprocess.Queue,
-                      _out: multiprocess.Queue, _wId: int) -> None:
+def worker_controller(_stop: multiprocessing.Event, _in: multiprocessing.Queue,
+                      _out: multiprocessing.Queue, _wId: int) -> None:
   while not _stop.is_set():
     try:
-      task: ParallelTask | None = _in.get(timeout=0.01)
+      id, fun, args, kwargs = dill.loads(_in.get(timeout=0.01))
 
       ret, exc = None, None
       try:
-        ret = task._fun(*task._args, **task._kwargs)
+        ret = fun(*args, **kwargs)
       except BaseException as e:
         exc = e
-      _out.put((task._id, ret, exc))
+      _out.put(dill.dumps((id, ret, exc)))
     except queue.Empty:
       continue
     except:
@@ -254,12 +255,12 @@ class ParallelWorker:
     return taskGroup
 
   def execute(self):
-    workerIn = multiprocess.Manager().Queue()
-    workerOut = multiprocess.Manager().Queue()
-    stop = multiprocess.Event()
+    workerIn = multiprocessing.Manager().Queue()
+    workerOut = multiprocessing.Manager().Queue()
+    stop = multiprocessing.Event()
     processes = []
     for i in range(self._workers):
-      p = multiprocess.Process(target=worker_controller,
+      p = multiprocessing.Process(target=worker_controller,
                                args=(stop, workerIn, workerOut, i))
       processes.append(p)
       p.start()
@@ -273,7 +274,7 @@ class ParallelWorker:
           if task.isExecutable():
             if isinstance(task, ParallelTask):
               task.resolveArguments()
-              workerIn.put(task)
+              workerIn.put(dill.dumps((task._id, task._fun, task._args, task._kwargs)))
               doneTasks.append(task)
               self._tasks.remove(task)
             else:
@@ -283,7 +284,7 @@ class ParallelWorker:
               self._tasks.remove(task)
 
         if not workerOut.empty():
-          tId, ret, exc = workerOut.get()
+          tId, ret, exc = dill.loads(workerOut.get())
           for task in doneTasks:
             if task._id == tId:
               if exc:
