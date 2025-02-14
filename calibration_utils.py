@@ -1109,7 +1109,7 @@ def calibrate_camera(config,
     elif len(dataset.images):
       #allCorners, allIds = detect_charuco_board(list(dataset.images), dataset.board)
 
-      allCorners, allids = [], []
+      allCorners, allIds = [], []
       for image in list(dataset.images):
         corners, ids = detect_charuco_board(image, dataset.board)
         allCorners.append(corners)
