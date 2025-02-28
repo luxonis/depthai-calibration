@@ -12,21 +12,6 @@ EXTRINSICS_PER_CCM = False
 colors = [(0, 255, 0), (0, 0, 255)]
 
 
-class StereoExceptions(Exception):
-
-  def __init__(self, message, stage, path=None, *args, **kwargs) -> None:
-    self.stage = stage
-    self.path = path
-    super().__init__(message, *args)
-
-  @property
-  def summary(self) -> str:
-    """
-    Returns a more comprehensive summary of the exception
-    """
-    return f"'{self.args[0]}' (occured during stage '{self.stage}')"
-
-
 @parallel_function
 def estimate_pose_and_filter(camData: CameraData, corners, ids,
                              charucoBoard: CharucoBoard):
@@ -180,7 +165,7 @@ def calibrate_charuco(camData: CameraData, allCorners, allIds,
        flags=flags,
        criteria=(cv2.TERM_CRITERIA_EPS & cv2.TERM_CRITERIA_COUNT, 1000, 1e-6))
   #except:
-  #  return f"First intrisic calibration failed for {cam_info['size']}", None, None
+  #  return f"First intrinsic calibration failed for {cam_info['size']}", None, None
 
   camData['intrinsics'] = camera_matrix
   camData['dist_coeff'] = distortion_coefficients
@@ -944,10 +929,7 @@ def calibrate_camera_charuco(allCorners, allIds, imsize, distortion_flags,
                        1e-9))
       except:
         print('failed on dataset', dataset.name)
-        raise StereoExceptions(message="Intrisic calibration failed",
-                               stage="intrinsic_calibration",
-                               element='',
-                               id=0)
+        raise RuntimeError("Intrinsic calibration failed")
       cameraIntrinsics = camera_matrix
       distCoeff = distortion_coefficients
       threshold = 5 * imsize[1] / 800.0
