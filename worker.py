@@ -216,7 +216,7 @@ def worker_controller(_stop: multiprocessing.Event, _in: multiprocessing.Queue,
                       _out: multiprocessing.Queue, _wId: int) -> None:
   while not _stop.is_set():
     try:
-      id, fun, args, kwargs = dill.loads(_in.get(timeout=0.01))
+      id, fun, args, kwargs = dill.loads(_in.get(timeout=0.1))
 
       ret, exc = None, None
       try:
@@ -432,6 +432,9 @@ class ParallelFunction:
 
   def __call__(self, *args, **kwargs):
     return self._fun(*args, **kwargs)
+
+  def __repr__(self) -> str:
+    return repr(self._fun)
 
   @staticmethod
   def _run_function(fun, *args, **kwargs):
