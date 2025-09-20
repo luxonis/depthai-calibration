@@ -14,13 +14,12 @@ colors = [(0, 255, 0), (0, 0, 255)]
 
 @parallel_function
 def estimate_pose_and_filter(camData: CameraData, corners, ids,
-                             charucoBoard: CharucoBoard):
+                             charucoBoard: CharucoBoard, threshold = None):
   """Very rough corner filtering on a single image"""
 
   objpoints = charucoBoard.board.chessboardCorners[ids]
 
   ini_threshold = 5
-  threshold = None
 
   objects = []
   all_objects = []
@@ -454,6 +453,9 @@ def find_stereo_common_features(leftCorners, leftIds, rightCorners, rightIds,
   failed = 0
 
   for i, _ in enumerate(leftIds):  # For ids in all images
+    if len(leftIds[i]) < 20 or len(rightIds[i]) < 20:
+      #failed += 1
+      continue
     commonIds = np.intersect1d(leftIds[i], rightIds[i])
     left_sub_corners = leftCorners[i][np.isin(leftIds[i], commonIds)]
     right_sub_corners = rightCorners[i][np.isin(rightIds[i], commonIds)]
@@ -590,7 +592,7 @@ def get_distortion_flags(distortionModel: DistortionModel):
   elif distortionModel == DistortionModel.Tilted:
     print("Using TILTED model")
     flags = cv2.CALIB_RATIONAL_MODEL
-    flags += cv2.CALIB_TILTED_MODEL
+    #flags += cv2.CALIB_TILTED_MODEL
 
   elif distortionModel == DistortionModel.Prism:
     print("Using PRISM model")
@@ -1059,6 +1061,16 @@ def calibrate_fisheye(config: CalibrationConfig, allCorners, allIds, imsize,
   return res, K, d, rvecs, tvecs, filtered_ids, filtered_corners
 
 
+def filter_with_new_intrinsics(camData: CameraData, dataset: Dataset, allCorners, allIds, threshold = None):
+    filterCorners = []
+    filterIds = []
+    for corners, ids in zip(allCorners, allIds):
+      corners, ids, _ = estimate_pose_and_filter(camData, corners, ids,
+                                                     dataset.board, threshold = threshold)
+      filterCorners.append(corners)
+      filterIds.append(ids)
+    return filterCorners, filterIds
+
 @parallel_function
 def calibrate_camera(config,
                      board_config,
@@ -1097,7 +1109,7 @@ def calibrate_camera(config,
     camData['calib_model'] = calib_model
     camData['distortion_model'] = distortion_model
 
-    if len(dataset.allCorners) and len(dataset.allIds):
+    if len(dataset.allCorners) and len(dataset.allIds) and False:
       allCorners, allIds = dataset.allCorners, dataset.allIds
     elif len(dataset.images):
       #allCorners, allIds = detect_charuco_board(list(dataset.images), dataset.board)
@@ -1140,6 +1152,9 @@ def calibrate_camera(config,
     right_cam_info = camInfos[right.id]
     leftCorners, leftIds = filteredCharucos[left.id]
     rightCorners, rightIds = filteredCharucos[right.id]
+
+    leftCorners, leftIds = filter_with_new_intrinsics(left_cam_info, left, leftCorners, leftIds, threshold = 1.0)
+    rightCorners, rightIds = filter_with_new_intrinsics(right_cam_info, right, rightCorners, rightIds, threshold = 1.0)
 
     left_corners_sampled, right_corners_sampled, obj_pts = find_stereo_common_features(
         leftCorners, leftIds, rightCorners, rightIds, left.board)
@@ -1209,8 +1224,7 @@ class StereoCalibration(object):
         raise RuntimeError('Extrinsic pair has different dataset board')
 
     #board_config, filteredCharucos, allExtrinsics, camInfos, stereoConfigs = calibrate_camera.run_parallel(10, config, board_config, camera_model, intrinsicCameras, extrinsicPairs)
-    board_config, filteredCharucos, allExtrinsics, camInfos, stereoConfigs = calibrate_camera.run_parallel(
-        10, config, board_config, camera_model, intrinsicCameras,
+    board_config, filteredCharucos, allExtrinsics, camInfos, stereoConfigs = calibrate_camera(config, board_config, camera_model, intrinsicCameras,
         extrinsicPairs)
 
     # Construct board config from calibrated cam infos
