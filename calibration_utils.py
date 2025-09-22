@@ -85,7 +85,7 @@ def detect_charuco_board(image: np.array, board: CharucoBoard):
       markers,
       marker_ids,
       rejectedCorners=rejectedImgPoints)
-  criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10000,
+  criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_MAX_ITER, 10000,
               0.00001)
 
   # If found, add object points, image points (after refining them)
@@ -163,7 +163,7 @@ def calibrate_charuco(camData: CameraData, allCorners, allIds,
        cameraMatrix=camData['intrinsics'],
        distCoeffs=camData['dist_coeff'],
        flags=flags,
-       criteria=(cv2.TERM_CRITERIA_EPS & cv2.TERM_CRITERIA_COUNT, 1000, 1e-6))
+       criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 1000, 1e-6))
   #except:
   #  return f"First intrinsic calibration failed for {cam_info['size']}", None, None
 
@@ -288,6 +288,7 @@ def calibrate_stereo_perspective(config: CalibrationConfig, obj_pts,
   distortion_flags = get_distortion_flags(left_distortion_model)
   flags += distortion_flags
   # print(flags)
+  print(len(allLeftCorners), len(allRightCorners))
   ret, M1, d1, M2, d2, R, T, E, F, _ = cv2.stereoCalibrateExtended(
       obj_pts,
       allLeftCorners,
@@ -403,7 +404,7 @@ def calibrate_stereo_fisheye(config: CalibrationConfig, obj_pts,
   # flags |= cv2.CALIB_RATIONAL_MODEL
   # flags |= cv2.CALIB_USE_INTRINSIC_GUESS
   # flags |= cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC
-  # flags = cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC + cv2.fisheye.CALIB_CHECK_COND + cv2.fisheye.CALIB_FIX_SKEW
+  # flags = cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC | cv2.fisheye.CALIB_CHECK_COND | cv2.fisheye.CALIB_FIX_SKEW
   obj_pts_truncated = np.array(obj_pts_truncated)
   obj_pts_truncated = obj_pts_truncated.reshape((*obj_pts_truncated.shape[:2], 1, 3))
   
@@ -550,60 +551,60 @@ def get_distortion_flags(distortionModel: DistortionModel):
 
   elif all(char in '01' for char in str(distortionModel)):
     flags = cv2.CALIB_RATIONAL_MODEL
-    flags += cv2.CALIB_TILTED_MODEL
-    flags += cv2.CALIB_THIN_PRISM_MODEL
+    flags |= cv2.CALIB_TILTED_MODEL
+    flags |= cv2.CALIB_THIN_PRISM_MODEL
     distFlags = int(distortionModel, 2)
 
     if distFlags & (1 << 0):
       print("FIX_K1")
-      flags += cv2.CALIB_FIX_K1
+      flags |= cv2.CALIB_FIX_K1
     if distFlags & (1 << 1):
       print("FIX_K2")
-      flags += cv2.CALIB_FIX_K2
+      flags |= cv2.CALIB_FIX_K2
     if distFlags & (1 << 2):
       print("FIX_K3")
-      flags += cv2.CALIB_FIX_K3
+      flags |= cv2.CALIB_FIX_K3
     if distFlags & (1 << 3):
       print("FIX_K4")
-      flags += cv2.CALIB_FIX_K4
+      flags |= cv2.CALIB_FIX_K4
     if distFlags & (1 << 4):
       print("FIX_K5")
-      flags += cv2.CALIB_FIX_K5
+      flags |= cv2.CALIB_FIX_K5
     if distFlags & (1 << 5):
       print("FIX_K6")
-      flags += cv2.CALIB_FIX_K6
+      flags |= cv2.CALIB_FIX_K6
     if distFlags & (1 << 6):
       print("FIX_TANGENT_DISTORTION")
-      flags += cv2.CALIB_ZERO_TANGENT_DIST
+      flags |= cv2.CALIB_ZERO_TANGENT_DIST
     if distFlags & (1 << 7):
       print("FIX_TILTED_DISTORTION")
-      flags += cv2.CALIB_FIX_TAUX_TAUY
+      flags |= cv2.CALIB_FIX_TAUX_TAUY
     if distFlags & (1 << 8):
       print("FIX_PRISM_DISTORTION")
-      flags += cv2.CALIB_FIX_S1_S2_S3_S4
+      flags |= cv2.CALIB_FIX_S1_S2_S3_S4
 
   elif distortionModel == DistortionModel.Normal:
     print("Using NORMAL model")
     flags = cv2.CALIB_RATIONAL_MODEL
-    flags += cv2.CALIB_TILTED_MODEL
+    flags |= cv2.CALIB_TILTED_MODEL
 
   elif distortionModel == DistortionModel.Tilted:
     print("Using TILTED model")
     flags = cv2.CALIB_RATIONAL_MODEL
-    flags += cv2.CALIB_TILTED_MODEL
+    flags |= cv2.CALIB_TILTED_MODEL
 
   elif distortionModel == DistortionModel.Prism:
     print("Using PRISM model")
     flags = cv2.CALIB_RATIONAL_MODEL
-    flags += cv2.CALIB_TILTED_MODEL
-    flags += cv2.CALIB_THIN_PRISM_MODEL
+    flags |= cv2.CALIB_TILTED_MODEL
+    flags |= cv2.CALIB_THIN_PRISM_MODEL
 
   elif distortionModel == DistortionModel.Thermal:
     print("Using THERMAL model")
     flags = cv2.CALIB_RATIONAL_MODEL
-    flags += cv2.CALIB_FIX_K3
-    flags += cv2.CALIB_FIX_K5
-    flags += cv2.CALIB_FIX_K6
+    flags |= cv2.CALIB_FIX_K3
+    flags |= cv2.CALIB_FIX_K5
+    flags |= cv2.CALIB_FIX_K6
 
   elif isinstance(distortionModel, int):
     print("Using CUSTOM flags")
@@ -682,15 +683,15 @@ def features_filtering_function(rvecs,
   removed_error = []
   display_corners = []
   display_points = []
-  circle_size = 0
   reported_error = []
-  for i, (corners, ids) in enumerate(zip(filtered_corners, filtered_id)):
+
+  for rvec, tvec, corners, ids in zip(rvecs, tvecs, filtered_corners, filtered_id):
     if ids is not None and corners.size > 0:
       ids = ids.flatten()  # Flatten the IDs from 2D to 1D
       objPoints = np.array(
           [dataset.board.board.chessboardCorners[id] for id in ids],
           dtype=np.float32)
-      imgpoints2, _ = cv2.projectPoints(objPoints, rvecs[i], tvecs[i],
+      imgpoints2, _ = cv2.projectPoints(objPoints, rvec, tvec,
                                         cameraMatrix, distCoeffs)
       corners2 = corners.reshape(-1, 2)
       imgpoints2 = imgpoints2.reshape(-1, 2)
@@ -765,14 +766,18 @@ def camera_pose_charuco(objpoints: np.array,
     all_corners = np.array([all_corners[id[0]] for id in objects])
     imgpoints2 = np.array([imgpoints2[id[0]] for id in objects])
 
+    if len(imgpoints2) < 6:
+      break
+
     ret, rvec, tvec = cv2.solvePnP(imgpoints2, all_corners, K, d)
     imgpoints2, _ = cv2.projectPoints(imgpoints2, rvec, tvec, K, d)
 
     ini_threshold += threshold_stepper
+
   if ret:
-    return rvec, tvec
-  else:
-    raise RuntimeError()  # TODO : Handle
+    return True, rvec, tvec
+
+  return False, None, None
 
 
 def compute_reprojection_errors(obj_pts: np.array,
@@ -862,72 +867,56 @@ def calibrate_camera_charuco(allCorners, allIds, imsize, distortion_flags,
   # check if there are any suspicious corners with high reprojection error
   rvecs = []
   tvecs = []
-  index = 0
+  validCorners = []
+  validIds = []
   for corners, ids in zip(allCorners, allIds):
     objpts = dataset.board.board.chessboardCorners[ids]
-    rvec, tvec = camera_pose_charuco(objpts, corners, ids, cameraIntrinsics,
+    ret, rvec, tvec = camera_pose_charuco(objpts, corners, ids, cameraIntrinsics,
                                      distCoeff)
+    if not ret:
+      continue
+
     tvecs.append(tvec)
     rvecs.append(rvec)
-    index += 1
+    validCorners.append(corners)
+    validIds.append(ids)
 
   # Here we need to get initialK and parameters for each camera ready and fill them inside reconstructed reprojection error per point
   ret = 0.0
   flags = cv2.CALIB_USE_INTRINSIC_GUESS
-  flags += distortion_flags
+  flags |= distortion_flags
 
   #   flags = (cv2.CALIB_RATIONAL_MODEL)
-  reprojection = []
-  num_threshold = []
-  iterations_array = []
   intrinsic_array = {"f_x": [], "f_y": [], "c_x": [], "c_y": []}
-  distortion_array = {}
   index = 0
   camera_matrix = cameraIntrinsics
   distortion_coefficients = distCoeff
-  rotation_vectors = rvecs
-  translation_vectors = tvecs
-  translation_array_x = []
-  translation_array_y = []
-  translation_array_z = []
-  import time
-  if True:
+
+  if True: # TODO : Remove
     whole = time.time()
     while True:
       intrinsic_array['f_x'].append(camera_matrix[0][0])
       intrinsic_array['f_y'].append(camera_matrix[1][1])
       intrinsic_array['c_x'].append(camera_matrix[0][2])
       intrinsic_array['c_y'].append(camera_matrix[1][2])
-      num_threshold.append(threshold)
-
-      translation_array_x.append(np.mean(
-          np.array(translation_vectors).T[0][0]))
-      translation_array_y.append(np.mean(
-          np.array(translation_vectors).T[0][1]))
-      translation_array_z.append(np.mean(
-          np.array(translation_vectors).T[0][2]))
 
       start = time.time()
       filtered_corners, filtered_ids, all_error, removed_corners, removed_ids, removed_error = features_filtering_function(
-          rotation_vectors,
-          translation_vectors,
+          rvecs,
+          tvecs,
           camera_matrix,
           distortion_coefficients,
-          allCorners,
-          allIds,
+          validCorners,
+          validIds,
           threshold=threshold,
           dataset=dataset)
-      iterations_array.append(index)
-      reprojection.append(ret)
-      for i in range(len(distortion_coefficients)):
-        if i not in distortion_array:
-          distortion_array[i] = []
-        distortion_array[i].append(distortion_coefficients[i][0])
+
       print(f"Each filtering {time.time() - start}")
       start = time.time()
+
       try:
-        (ret, camera_matrix, distortion_coefficients, rotation_vectors,
-         translation_vectors, stdDeviationsIntrinsics, stdDeviationsExtrinsics,
+        (ret, camera_matrix, distortion_coefficients, rvecs,
+         tvecs, stdDeviationsIntrinsics, stdDeviationsExtrinsics,
          perViewErrors) = cv2.aruco.calibrateCameraCharucoExtended(
              charucoCorners=filtered_corners,
              charucoIds=filtered_ids,
@@ -936,7 +925,7 @@ def calibrate_camera_charuco(allCorners, allIds, imsize, distortion_flags,
              cameraMatrix=cameraIntrinsics,
              distCoeffs=distCoeff,
              flags=flags,
-             criteria=(cv2.TERM_CRITERIA_EPS & cv2.TERM_CRITERIA_COUNT, 50000,
+             criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 50000,
                        1e-9))
       except:
         print('failed on dataset', dataset.name)
@@ -944,13 +933,14 @@ def calibrate_camera_charuco(allCorners, allIds, imsize, distortion_flags,
       cameraIntrinsics = camera_matrix
       distCoeff = distortion_coefficients
       threshold = 5 * imsize[1] / 800.0
+
       print(f"Each calibration {time.time()-start}")
       index += 1
       if index > 5:  #or (previous_ids == removed_ids and len(previous_ids) >= len(removed_ids) and index > 2):
         print(f"Whole procedure: {time.time() - whole}")
         break
       #previous_ids = removed_ids
-  return ret, camera_matrix, distortion_coefficients, rotation_vectors, translation_vectors, filtered_ids, filtered_corners, allCorners, allIds
+  return ret, camera_matrix, distortion_coefficients, rvecs, tvecs, filtered_ids, filtered_corners, allCorners, allIds
 
 
 @parallel_function
@@ -990,7 +980,7 @@ def calibrate_fisheye(config: CalibrationConfig, allCorners, allIds, imsize,
   flags |= cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC
   flags |= cv2.fisheye.CALIB_FIX_SKEW
 
-  term_criteria = (cv2.TERM_CRITERIA_COUNT + cv2.TERM_CRITERIA_EPS, 30, 1e-9)
+  term_criteria = (cv2.TERM_CRITERIA_COUNT | cv2.TERM_CRITERIA_EPS, 30, 1e-9)
   try:
     res, K, d, rvecs, tvecs = cv2.fisheye.calibrate(obj_points,
                                                     filtered_corners,
@@ -1065,19 +1055,14 @@ def calibrate_camera(config,
                      camera_model,
                      intrinsicCameras: List[Dataset] = [],
                      extrinsicPairs: List[Tuple[Dataset, Dataset]] = []):
-  camInfos = {}
+  camInfos = {} # Indexed by camera name
+  filteredCharucos = {} # Indexed by dataset id
+
   stereoConfigs = []
   allExtrinsics = []
-  filteredCharucos = {}
-
-  # Compile a list of unique datasets
-  uniqueDatasets = intrinsicCameras
-  for dataset in chain(*extrinsicPairs):
-    if dataset not in uniqueDatasets:
-      uniqueDatasets.append(dataset)
 
   # Calibrate camera intrinsics for all provided datasets
-  for dataset in uniqueDatasets:
+  for dataset in intrinsicCameras:
     camData: CameraData = [
         c for c in board_config['cameras'].values()
         if c['name'] == dataset.name
@@ -1097,7 +1082,7 @@ def calibrate_camera(config,
     camData['calib_model'] = calib_model
     camData['distortion_model'] = distortion_model
 
-    if len(dataset.allCorners) and len(dataset.allIds):
+    if False and len(dataset.allCorners) and len(dataset.allIds):
       allCorners, allIds = dataset.allCorners, dataset.allIds
     elif len(dataset.images):
       #allCorners, allIds = detect_charuco_board(list(dataset.images), dataset.board)
@@ -1129,17 +1114,36 @@ def calibrate_camera(config,
       camData = calibrate_charuco(camData, corners, ids, dataset)
       camData, corners, ids = calibrate_ccm_intrinsics_per_ccm(
           config, camData, dataset)
-      camInfos[dataset.id] = camData
+      camInfos[dataset.name] = camData
       filteredCharucos[dataset.id] = [corners, ids]
     else:
       camData = calibrate_ccm_intrinsics(
           config, camData, dataset.board)  # TODO : Not a parallel function
 
   for left, right in extrinsicPairs:
-    left_cam_info = camInfos[left.id]
-    right_cam_info = camInfos[right.id]
-    leftCorners, leftIds = filteredCharucos[left.id]
-    rightCorners, rightIds = filteredCharucos[right.id]
+    left_cam_info = camInfos[left.name]
+    right_cam_info = camInfos[right.name]
+    if left.id in filteredCharucos:
+      leftCorners, leftIds = filteredCharucos[left.id]
+    else:
+      leftCorners, leftIds = [], []
+      for corners, ids in zip(left.allCorners, left.allIds):
+        corners, ids, _ = estimate_pose_and_filter(left_cam_info, corners, ids,
+                                                   left.board)
+        leftCorners.append(corners)
+        leftIds.append(ids)
+      filteredCharucos[left.id] = [leftCorners, leftIds]
+
+    if right.id in filteredCharucos:
+      rightCorners, rightIds = filteredCharucos[right.id]
+    else:
+      rightCorners, rightIds = [], []
+      for corners, ids in zip(right.allCorners, right.allIds):
+        corners, ids, _ = estimate_pose_and_filter(right_cam_info, corners, ids,
+                                                   right.board)
+        rightCorners.append(corners)
+        rightIds.append(ids)
+      filteredCharucos[right.id] = [rightCorners, rightIds]
 
     left_corners_sampled, right_corners_sampled, obj_pts = find_stereo_common_features(
         leftCorners, leftIds, rightCorners, rightIds, left.board)
@@ -1174,7 +1178,7 @@ def calibrate_camera(config,
     left_cam_info, stereo_config = calculate_epipolar_error(
         left_cam_info, right_cam_info, left, right, board_config, extrinsics)
     allExtrinsics.append(extrinsics)
-    camInfos[left.id] = left_cam_info
+    camInfos[left.name] = left_cam_info
     stereoConfigs.append(stereo_config)
 
   return board_config, filteredCharucos, allExtrinsics, camInfos, stereoConfigs
@@ -1194,7 +1198,7 @@ class StereoCalibration(object):
     """Function to calculate calibration for stereo camera."""
     config = CalibrationConfig(
         initial_max_threshold, initial_min_filtered, camera_model,
-        (cv2.TERM_CRITERIA_COUNT + cv2.TERM_CRITERIA_EPS, 300, 1e-9))
+        (cv2.TERM_CRITERIA_COUNT | cv2.TERM_CRITERIA_EPS, 300, 1e-9))
 
     for a, b in extrinsicPairs:
       if len(a.allIds) != len(b.allIds):
@@ -1209,21 +1213,21 @@ class StereoCalibration(object):
         raise RuntimeError('Extrinsic pair has different dataset board')
 
     #board_config, filteredCharucos, allExtrinsics, camInfos, stereoConfigs = calibrate_camera.run_parallel(10, config, board_config, camera_model, intrinsicCameras, extrinsicPairs)
-    board_config, filteredCharucos, allExtrinsics, camInfos, stereoConfigs = calibrate_camera.run_parallel(
-        10, config, board_config, camera_model, intrinsicCameras,
+    board_config, filteredCharucos, allExtrinsics, camInfos, stereoConfigs = calibrate_camera(
+        config, board_config, camera_model, intrinsicCameras,
         extrinsicPairs)
 
     # Construct board config from calibrated cam infos
     for dataset in intrinsicCameras:
       for socket in board_config['cameras']:
         if board_config['cameras'][socket]['name'] == dataset.name:
-          board_config['cameras'][socket] = camInfos[dataset.id]
+          board_config['cameras'][socket] = camInfos[dataset.name]
 
     for left, _ in extrinsicPairs:
       for socket in board_config['cameras']:
         if board_config['cameras'][socket]['name'] == left.name:
           board_config['cameras'][socket]['extrinsics'] = camInfos[
-              left.id]['extrinsics']
+              left.name]['extrinsics']
 
     for stereoConfig in stereoConfigs:
       if stereoConfig:

@@ -1,6 +1,7 @@
 from typing import Dict, Any, Callable, Iterable, Tuple, TypeVar, Generic, List
 from collections import abc
 import multiprocessing
+import traceback
 import inspect
 import random
 import queue
@@ -223,6 +224,7 @@ def worker_controller(_stop: multiprocessing.Event, _in: multiprocessing.Queue,
         ret = fun(*args, **kwargs)
       except BaseException as e:
         exc = e
+        traceback.print_exception(e)
       _out.put(dill.dumps((id, ret, exc)))
     except queue.Empty:
       continue
@@ -265,7 +267,7 @@ class ParallelWorker:
       processes.append(p)
       p.start()
 
-    doneTasks = []
+    runningTasks = {}
     remaining = len(self._tasks)
 
     try:
@@ -275,7 +277,7 @@ class ParallelWorker:
             if isinstance(task, ParallelTask):
               task.resolveArguments()
               workerIn.put(dill.dumps((task._id, task._fun, task._args, task._kwargs)))
-              doneTasks.append(task)
+              runningTasks[task._id] = task
               self._tasks.remove(task)
             else:
               newTasks = task.tasks()
@@ -285,13 +287,12 @@ class ParallelWorker:
 
         if not workerOut.empty():
           tId, ret, exc = dill.loads(workerOut.get())
-          for task in doneTasks:
-            if task._id == tId:
-              if exc:
-                raise Exception(
-                    f'Calibration pipeline failed during \'{task}\'') from exc
-              task.finish(ret, exc)
-              remaining -= 1
+          task = runningTasks[tId]
+          if exc:
+            raise Exception(f"Calibration pipeline failed during '{task}'") from exc
+          task.finish(ret, exc)
+          del runningTasks[tId]
+          remaining -= 1
     finally:
       stop.set()
       for p in processes:
