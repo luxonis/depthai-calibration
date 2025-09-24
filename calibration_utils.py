@@ -1164,7 +1164,7 @@ class StereoCalibration(object):
             img = cv2.imread(im)
             # h, w = img.shape[:2]
             if self.cameraModel == 'perspective':
-                kScaled, _ = cv2.getOptimalNewCameraMatrix(K, D, img_size, 1)
+                kScaled, _ = cv2.getOptimalNewCameraMatrix(K, D, img_size, 0)
                 # print(f'K scaled is \n {kScaled} and size is \n {img_size}')
                 # print(f'D Value is \n {D}')
                 map1, map2 = cv2.initUndistortRectifyMap(
@@ -1182,10 +1182,10 @@ class StereoCalibration(object):
             if self.traceLevel == 4 or self.traceLevel == 5 or self.traceLevel == 10:
                 cv2.putText(undistorted_img, "Press S to save image", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 2*undistorted_img.shape[0]/1750, (0, 0, 255), 2)
                 cv2.imshow("undistorted", undistorted_img)
-                k = cv2.waitKey(0)
+                k = cv2.waitKey(1)
                 if k == ord("s") or k == ord("S"):
-                    #undistorted_img = cv2.remap(
-                    #    img, map1, map2, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
+                    undistorted_img = cv2.remap(
+                        img, map1, map2, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
                     undistorted_file_path = self.data_path + '/' + name + f'_{index}_undistorted.png'
                     cv2.imwrite(undistorted_file_path, undistorted_img)
                 if k == 27:  # Esc key to stop
@@ -1505,7 +1505,7 @@ class StereoCalibration(object):
             rvec, tvec, newids = self.camera_pose_charuco(objpts, corners, ids, cameraMatrix_l, distCoeff_l)
             tvecs.append(tvec)
             rvecs.append(rvec)
-        allCorners_l, allIds_l, all_error, removed_corners, removed_ids, removed_error = self.features_filtering_function(rvecs, tvecs, cameraMatrix_l, distCoeff_l, res, allCorners_l, allIds_l, camera = left_name, threshold=2.5)
+        allCorners_l, allIds_l, all_error, removed_corners, removed_ids, removed_error = self.features_filtering_function(rvecs, tvecs, cameraMatrix_l, distCoeff_l, res, allCorners_l, allIds_l, camera = left_name, threshold=1)
         rvecs = []
         tvecs = []
         for corners, ids in zip(allCorners_r, allIds_r):
@@ -1513,7 +1513,7 @@ class StereoCalibration(object):
             rvec, tvec, newids = self.camera_pose_charuco(objpts, corners, ids, cameraMatrix_r, distCoeff_r)
             tvecs.append(tvec)
             rvecs.append(rvec)
-        allCorners_r, allIds_r ,all_error, removed_corners, removed_ids, removed_error = self.features_filtering_function(rvecs, tvecs, cameraMatrix_r, distCoeff_r, res, allCorners_r, allIds_r, camera = right_name, threshold=2.5)
+        allCorners_r, allIds_r ,all_error, removed_corners, removed_ids, removed_error = self.features_filtering_function(rvecs, tvecs, cameraMatrix_r, distCoeff_r, res, allCorners_r, allIds_r, camera = right_name, threshold=1)
         if self.traceLevel == 2 or self.traceLevel == 4 or self.traceLevel == 10:
             print('Length of allIds_l')
             print(len(allIds_l))
