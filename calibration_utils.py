@@ -1071,6 +1071,25 @@ def filter_with_new_intrinsics(camData: CameraData, dataset: Dataset, allCorners
       filterIds.append(ids)
     return filterCorners, filterIds
 
+def drop_indices(leftCorners, leftIds, rightCorners, rightIds, leftBanned, rightBanned):
+    filterLeftCorners = []
+    filterLeftIds = []
+    filterRightCorners = []
+    filterRightIds = []
+    i_data = 0
+    j_data = 0
+    for i, (left, right) in enumerate(zip(leftBanned, rightBanned)):
+      if not left and not right:
+        filterLeftCorners.append(leftCorners[i_data])
+        filterLeftIds.append(leftIds[i_data])
+        filterRightCorners.append(rightCorners[j_data])
+        filterRightIds.append(rightIds[j_data])
+      if not left:
+        i_data += 1
+      if not right:
+        j_data +=1
+    return filterLeftCorners, filterLeftIds, filterRightCorners, filterRightIds
+
 @parallel_function
 def calibrate_camera(config,
                      board_config,
@@ -1126,12 +1145,17 @@ def calibrate_camera(config,
     if PER_CCM:
       camData = get_features(config, camData)
       if dataset.enableFiltering:
+        removedImages = []
         filteredCorners, filteredIds = [], []
-        for corners, ids in zip(allCorners, allIds):
+        for i, (corners, ids) in enumerate(zip(allCorners, allIds)):
           corners, ids, _ = estimate_pose_and_filter(camData, corners, ids,
                                                      dataset.board)
-          filteredCorners.append(corners)
-          filteredIds.append(ids)
+          if len(corners) > 10:
+            filteredCorners.append(corners)
+            filteredIds.append(ids)
+            removedImages.append(False)
+          else:
+            removedImages.append(True)
         corners, ids = filteredCorners, filteredIds
 
         #corners, ids = estimate_pose_and_filter(camData, allCorners, allIds, dataset.board)
@@ -1142,7 +1166,7 @@ def calibrate_camera(config,
       camData, corners, ids = calibrate_ccm_intrinsics_per_ccm(
           config, camData, dataset)
       camInfos[dataset.id] = camData
-      filteredCharucos[dataset.id] = [corners, ids]
+      filteredCharucos[dataset.id] = [corners, ids, removedImages]
     else:
       camData = calibrate_ccm_intrinsics(
           config, camData, dataset.board)  # TODO : Not a parallel function
@@ -1150,8 +1174,10 @@ def calibrate_camera(config,
   for left, right in extrinsicPairs:
     left_cam_info = camInfos[left.id]
     right_cam_info = camInfos[right.id]
-    leftCorners, leftIds = filteredCharucos[left.id]
-    rightCorners, rightIds = filteredCharucos[right.id]
+    leftCorners, leftIds, leftBanned = filteredCharucos[left.id]
+    rightCorners, rightIds, rightBanned = filteredCharucos[right.id]
+
+    leftCorners, leftIds, rightCorners, rightIds  = drop_indices(leftCorners,  leftIds, rightCorners, rightIds, leftBanned, rightBanned)
 
     leftCorners, leftIds = filter_with_new_intrinsics(left_cam_info, left, leftCorners, leftIds, threshold = 1.0)
     rightCorners, rightIds = filter_with_new_intrinsics(right_cam_info, right, rightCorners, rightIds, threshold = 1.0)
