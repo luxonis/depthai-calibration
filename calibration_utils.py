@@ -1540,8 +1540,6 @@ class StereoCalibration(object):
                 left_ids_sampled.append(np.array(allIds_l[i], dtype=np.int32))
                 right_corners_sampled.append(
                     np.array(right_sub_corners, dtype=np.float32))
-            else:
-                return -1, "Stereo Calib failed due to less common features"
 
         stereocalib_criteria = (cv2.TERM_CRITERIA_COUNT +
                                 cv2.TERM_CRITERIA_EPS, 300, 1e-9)
