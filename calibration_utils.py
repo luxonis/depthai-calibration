@@ -355,10 +355,14 @@ class StereoCalibration(object):
                 width_offset = (resizeWidth - width)//2
                 subImage = np.pad(coverageImage, ((height_offset, height_offset), (width_offset, width_offset), (0, 0)), 'constant', constant_values=0)
                 cv2.putText(subImage, print_text, (50, 50+height_offset), cv2.FONT_HERSHEY_SIMPLEX, 2*coverageImage.shape[0]/1750, (0, 0, 0), 2)
-                if combinedCoverageImage is None:
-                    combinedCoverageImage = subImage
-                else:
+                if combinedCoverageImage is not None:
+                    if subImage.shape[0] != combinedCoverageImage.shape[0]:
+                        print(f"Warning: dimension mismatch {subImage.shape[0]} vs {combinedCoverageImage.shape[0]}, resizing subImage")
+                        new_width = int(subImage.shape[1] * (combinedCoverageImage.shape[0] / subImage.shape[0]))
+                        subImage = cv2.resize(subImage, (new_width, combinedCoverageImage.shape[0]))
                     combinedCoverageImage = np.hstack((combinedCoverageImage, subImage))
+                else:
+                    combinedCoverageImage = subImage
                 coverage_file_path = filepath + '/' + coverage_name + '_coverage.png'
                 
                 cv2.imwrite(coverage_file_path, subImage)
