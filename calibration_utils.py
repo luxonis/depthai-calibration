@@ -287,7 +287,7 @@ def calibrate_stereo_perspective(config: CalibrationConfig, obj_pts,
   distortion_flags = get_distortion_flags(left_distortion_model)
   flags += distortion_flags
   # print(flags)
-  ret, M1, d1, M2, d2, R, T, E, F, _ = cv2.stereoCalibrateExtended(
+  ret, M1, d1, M2, d2, R, T, E, F, per_view_errors = cv2.stereoCalibrateExtended(
       obj_pts,
       allLeftCorners,
       allRightCorners,
@@ -300,6 +300,42 @@ def calibrate_stereo_perspective(config: CalibrationConfig, obj_pts,
       T=t_in,
       criteria=config.stereoCalibCriteria,
       flags=flags)
+
+  threshold = 3.0
+  if per_view_errors is not None:
+    per_view_errors = np.array(per_view_errors).reshape(-1)
+    if np.any(per_view_errors > threshold):
+      print(
+          f"Some images are over {threshold}px epipolar error, removing them.")
+      removed = []
+      for index in reversed(np.where(per_view_errors > threshold)[0].tolist()):
+        del obj_pts[index]
+        del allLeftCorners[index]
+        del allRightCorners[index]
+        removed.append(index)
+      removed.reverse()
+      print(
+          f"Removed images: {len(removed)}/{len(per_view_errors)}. Indexes: {removed}"
+      )
+
+      if len(removed) / len(per_view_errors) > 0.8:
+        raise RuntimeError(
+            'Filtered more than 80% of images during stereo outlier rejection'
+        )
+
+      ret, M1, d1, M2, d2, R, T, E, F, per_view_errors = cv2.stereoCalibrateExtended(
+          obj_pts,
+          allLeftCorners,
+          allRightCorners,
+          cameraMatrix_l,
+          distCoeff_l,
+          cameraMatrix_r,
+          distCoeff_r,
+          None,
+          R=r_in,
+          T=t_in,
+          criteria=config.stereoCalibCriteria,
+          flags=flags)
 
   r_euler = Rotation.from_matrix(R).as_euler('xyz', degrees=True)
   print(f'Epipolar error is {ret}')
@@ -1117,12 +1153,12 @@ def calibrate_camera(config,
     if "calib_model" in camData and len(camData["calib_model"].split("_")) > 1:
       cameraModel_ccm, model_ccm = camData["calib_model"].split("_")
       if cameraModel_ccm == "fisheye":
-        model_ccm == None
+        model_ccm = None
       calib_model = cameraModel_ccm
       distortion_model = model_ccm
     else:
       calib_model = camera_model
-      distortion_model = DistortionModel.Tilted  # Use the tilted model by default
+      distortion_model = None
 
     camData['size'] = dataset.imageSize
     camData['calib_model'] = calib_model
