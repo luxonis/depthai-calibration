@@ -628,6 +628,10 @@ def get_distortion_flags(distortionModel: DistortionModel):
     flags = cv2.CALIB_RATIONAL_MODEL
     flags += cv2.CALIB_TILTED_MODEL
 
+  elif distortionModel == DistortionModel.Rational:
+    print("Using RATIONAL model")
+    flags = cv2.CALIB_RATIONAL_MODEL
+
   elif distortionModel == DistortionModel.Prism:
     print("Using PRISM model")
     flags = cv2.CALIB_RATIONAL_MODEL
@@ -644,6 +648,10 @@ def get_distortion_flags(distortionModel: DistortionModel):
   elif isinstance(distortionModel, int):
     print("Using CUSTOM flags")
     flags = distortionModel
+  
+  else:
+    raise RuntimeError(f'Invalid distortion model {distortionModel}')
+
   return flags
 
 
