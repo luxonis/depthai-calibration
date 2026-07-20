@@ -1103,22 +1103,23 @@ def calibrate_fisheye(config: CalibrationConfig, allCorners, allIds, imsize,
   return res, K, d, rvecs, tvecs, filtered_ids, filtered_corners
 
 
-def drop_indices(leftCorners, leftIds, rightCorners, rightIds, leftBanned, rightBanned):
+@parallel_function
+def drop_indices(leftCorners, leftIds, rightCorners, rightIds):
     filterLeftCorners = []
     filterLeftIds = []
     filterRightCorners = []
     filterRightIds = []
     i_data = 0
     j_data = 0
-    for i, (left, right) in enumerate(zip(leftBanned, rightBanned)):
-      if not left and not right:
+    for i, _ in enumerate(leftCorners):
+      if len(leftCorners[i]) > 10 and len(rightCorners[i]) > 10:
         filterLeftCorners.append(leftCorners[i_data])
         filterLeftIds.append(leftIds[i_data])
         filterRightCorners.append(rightCorners[j_data])
         filterRightIds.append(rightIds[j_data])
-      if not left:
+      if len(leftCorners[i]) > 10:
         i_data += 1
-      if not right:
+      if len(rightCorners[i]) > 10:
         j_data +=1
     return filterLeftCorners, filterLeftIds, filterRightCorners, filterRightIds
 
@@ -1177,17 +1178,13 @@ def calibrate_camera(config,
     if PER_CCM:
       camData = get_features(config, camData)
       if dataset.enableFiltering:
-        removedImages = []
         filteredCorners, filteredIds = [], []
-        for i, (corners, ids) in enumerate(zip(allCorners, allIds)):
+        for corners, ids in zip(allCorners, allIds):
           corners, ids, _ = estimate_pose_and_filter(camData, corners, ids,
                                                      dataset.board)
-          if len(corners) > 10:
-            filteredCorners.append(corners)
-            filteredIds.append(ids)
-            removedImages.append(False)
-          else:
-            removedImages.append(True)
+
+          filteredCorners.append(corners)
+          filteredIds.append(ids)
         corners, ids = filteredCorners, filteredIds
 
         #corners, ids = estimate_pose_and_filter(camData, allCorners, allIds, dataset.board)
@@ -1198,7 +1195,7 @@ def calibrate_camera(config,
       camData, corners, ids = calibrate_ccm_intrinsics_per_ccm(
           config, camData, dataset)
       camInfos[dataset.id] = camData
-      filteredCharucos[dataset.id] = [corners, ids, removedImages]
+      filteredCharucos[dataset.id] = [corners, ids]
     else:
       camData = calibrate_ccm_intrinsics(
           config, camData, dataset.board)  # TODO : Not a parallel function
@@ -1206,10 +1203,10 @@ def calibrate_camera(config,
   for left, right in extrinsicPairs:
     left_cam_info = camInfos[left.id]
     right_cam_info = camInfos[right.id]
-    leftCorners, leftIds, leftBanned = filteredCharucos[left.id]
-    rightCorners, rightIds, rightBanned = filteredCharucos[right.id]
+    leftCorners, leftIds = filteredCharucos[left.id]
+    rightCorners, rightIds = filteredCharucos[right.id]
 
-    leftCorners, leftIds, rightCorners, rightIds  = drop_indices(leftCorners,  leftIds, rightCorners, rightIds, leftBanned, rightBanned)
+    leftCorners, leftIds, rightCorners, rightIds  = drop_indices(leftCorners,  leftIds, rightCorners, rightIds)
 
     left_corners_sampled, right_corners_sampled, obj_pts = find_stereo_common_features(
         leftCorners, leftIds, rightCorners, rightIds, left.board)
@@ -1278,9 +1275,7 @@ class StereoCalibration(object):
         print('Extrinsic pair has different dataset board')
         raise RuntimeError('Extrinsic pair has different dataset board')
 
-    #board_config, filteredCharucos, allExtrinsics, camInfos, stereoConfigs = calibrate_camera.run_parallel(10, config, board_config, camera_model, intrinsicCameras, extrinsicPairs)
-    board_config, filteredCharucos, allExtrinsics, camInfos, stereoConfigs = calibrate_camera.run_parallel(
-        10, config, board_config, camera_model, intrinsicCameras,
+    board_config, filteredCharucos, allExtrinsics, camInfos, stereoConfigs = calibrate_camera.run_parallel(10, config, board_config, camera_model, intrinsicCameras,
         extrinsicPairs)
 
     # Construct board config from calibrated cam infos
