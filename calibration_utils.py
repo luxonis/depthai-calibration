@@ -304,25 +304,23 @@ def calibrate_stereo_perspective(config: CalibrationConfig, obj_pts,
 
   threshold = 3.0
   if per_view_errors is not None:
-    per_view_errors = np.array(per_view_errors).reshape(-1)
-    if np.any(per_view_errors > threshold):
-      print(
-          f"Some images are over {threshold}px epipolar error, removing them.")
-      removed = []
-      for index in reversed(np.where(per_view_errors > threshold)[0].tolist()):
-        del obj_pts[index]
-        del allLeftCorners[index]
-        del allRightCorners[index]
-        removed.append(index)
-      removed.reverse()
-      print(
-          f"Removed images: {len(removed)}/{len(per_view_errors)}. Indexes: {removed}"
-      )
+    per_view_errors = np.asarray(per_view_errors).reshape(-1, 2)
+    view_errors = per_view_errors.max(axis=1)
 
-      if len(removed) / len(per_view_errors) > 0.8:
+    bad = np.where(view_errors > threshold)[0]
+    if bad.size:
+      if bad.size / len(view_errors) > 0.8:
         raise RuntimeError(
             'Filtered more than 80% of images during stereo outlier rejection'
         )
+
+      for index in reversed(bad.tolist()):
+        del obj_pts[index]
+        del allLeftCorners[index]
+        del allRightCorners[index]
+
+      removed = bad.tolist()
+      print(f"Removed images: {len(removed)}/{len(view_errors)}. Indexes: {removed}")
 
       ret, M1, d1, M2, d2, R, T, E, F, per_view_errors = cv2.stereoCalibrateExtended(
           obj_pts,
