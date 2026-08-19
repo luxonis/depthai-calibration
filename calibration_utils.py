@@ -288,7 +288,7 @@ def calibrate_stereo_perspective(config: CalibrationConfig, obj_pts,
   distortion_flags = get_distortion_flags(left_distortion_model)
   flags += distortion_flags
   # print(flags)
-  ret, M1, d1, M2, d2, R, T, E, F, _ = cv2.stereoCalibrateExtended(
+  ret, M1, d1, M2, d2, R, T, E, F, per_view_errors = cv2.stereoCalibrateExtended(
       obj_pts,
       allLeftCorners,
       allRightCorners,
@@ -301,6 +301,40 @@ def calibrate_stereo_perspective(config: CalibrationConfig, obj_pts,
       T=t_in,
       criteria=config.stereoCalibCriteria,
       flags=flags)
+
+  threshold = 1.4
+  if per_view_errors is not None:
+    left_bad = per_view_errors[:, 0] > threshold * max(1, leftCamData['size'][1] / 1080)
+    right_bad = per_view_errors[:, 1] > threshold * max(1, rightCamData['size'][1] / 1080)
+
+    bad = np.where(left_bad & right_bad)[0]
+    if bad.size:
+      if bad.size / len(per_view_errors) > 0.8:
+        raise RuntimeError(
+            'Filtered more than 80% of images during stereo outlier rejection'
+        )
+
+      for index in reversed(bad.tolist()):
+        del obj_pts[index]
+        del allLeftCorners[index]
+        del allRightCorners[index]
+
+      removed = bad.tolist()
+      print(f"Removed images: {len(removed)}/{len(per_view_errors)}. Indexes: {removed}")
+
+      ret, M1, d1, M2, d2, R, T, E, F, per_view_errors = cv2.stereoCalibrateExtended(
+          obj_pts,
+          allLeftCorners,
+          allRightCorners,
+          cameraMatrix_l,
+          distCoeff_l,
+          cameraMatrix_r,
+          distCoeff_r,
+          None,
+          R=r_in,
+          T=t_in,
+          criteria=config.stereoCalibCriteria,
+          flags=flags)
 
   r_euler = Rotation.from_matrix(R).as_euler('xyz', degrees=True)
   print(f'Epipolar error is {ret}')
@@ -592,6 +626,10 @@ def get_distortion_flags(distortionModel: DistortionModel):
     flags = cv2.CALIB_RATIONAL_MODEL
     flags += cv2.CALIB_TILTED_MODEL
 
+  elif distortionModel == DistortionModel.Rational:
+    print("Using RATIONAL model")
+    flags = cv2.CALIB_RATIONAL_MODEL
+
   elif distortionModel == DistortionModel.Prism:
     print("Using PRISM model")
     flags = cv2.CALIB_RATIONAL_MODEL
@@ -608,6 +646,10 @@ def get_distortion_flags(distortionModel: DistortionModel):
   elif isinstance(distortionModel, int):
     print("Using CUSTOM flags")
     flags = distortionModel
+  
+  else:
+    raise RuntimeError(f'Invalid distortion model {distortionModel}')
+
   return flags
 
 
@@ -1060,6 +1102,26 @@ def calibrate_fisheye(config: CalibrationConfig, allCorners, allIds, imsize,
 
 
 @parallel_function
+def drop_indices(leftCorners, leftIds, rightCorners, rightIds):
+    filterLeftCorners = []
+    filterLeftIds = []
+    filterRightCorners = []
+    filterRightIds = []
+    i_data = 0
+    j_data = 0
+    for i, _ in enumerate(leftCorners):
+      if len(leftCorners[i]) > 10 and len(rightCorners[i]) > 10:
+        filterLeftCorners.append(leftCorners[i_data])
+        filterLeftIds.append(leftIds[i_data])
+        filterRightCorners.append(rightCorners[j_data])
+        filterRightIds.append(rightIds[j_data])
+      if len(leftCorners[i]) > 10:
+        i_data += 1
+      if len(rightCorners[i]) > 10:
+        j_data +=1
+    return filterLeftCorners, filterLeftIds, filterRightCorners, filterRightIds
+
+@parallel_function
 def calibrate_camera(config,
                      board_config,
                      camera_model,
@@ -1086,12 +1148,12 @@ def calibrate_camera(config,
     if "calib_model" in camData and len(camData["calib_model"].split("_")) > 1:
       cameraModel_ccm, model_ccm = camData["calib_model"].split("_")
       if cameraModel_ccm == "fisheye":
-        model_ccm == None
+        model_ccm = None
       calib_model = cameraModel_ccm
       distortion_model = model_ccm
     else:
       calib_model = camera_model
-      distortion_model = DistortionModel.Tilted  # Use the tilted model by default
+      distortion_model = None
 
     camData['size'] = dataset.imageSize
     camData['calib_model'] = calib_model
@@ -1118,6 +1180,7 @@ def calibrate_camera(config,
         for corners, ids in zip(allCorners, allIds):
           corners, ids, _ = estimate_pose_and_filter(camData, corners, ids,
                                                      dataset.board)
+
           filteredCorners.append(corners)
           filteredIds.append(ids)
         corners, ids = filteredCorners, filteredIds
@@ -1140,6 +1203,8 @@ def calibrate_camera(config,
     right_cam_info = camInfos[right.id]
     leftCorners, leftIds = filteredCharucos[left.id]
     rightCorners, rightIds = filteredCharucos[right.id]
+
+    leftCorners, leftIds, rightCorners, rightIds  = drop_indices(leftCorners,  leftIds, rightCorners, rightIds)
 
     left_corners_sampled, right_corners_sampled, obj_pts = find_stereo_common_features(
         leftCorners, leftIds, rightCorners, rightIds, left.board)
@@ -1208,9 +1273,7 @@ class StereoCalibration(object):
         print('Extrinsic pair has different dataset board')
         raise RuntimeError('Extrinsic pair has different dataset board')
 
-    #board_config, filteredCharucos, allExtrinsics, camInfos, stereoConfigs = calibrate_camera.run_parallel(10, config, board_config, camera_model, intrinsicCameras, extrinsicPairs)
-    board_config, filteredCharucos, allExtrinsics, camInfos, stereoConfigs = calibrate_camera.run_parallel(
-        10, config, board_config, camera_model, intrinsicCameras,
+    board_config, filteredCharucos, allExtrinsics, camInfos, stereoConfigs = calibrate_camera.run_parallel(10, config, board_config, camera_model, intrinsicCameras,
         extrinsicPairs)
 
     # Construct board config from calibrated cam infos

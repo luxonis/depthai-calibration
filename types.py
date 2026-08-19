@@ -18,6 +18,7 @@ class CalibrationModel(StrEnum):
 class DistortionModel(StrEnum):
   Normal = 'NORMAL'
   Tilted = 'TILTED'
+  Rational = 'RATIONAL'
   Prism = 'PRISM'
   Thermal = 'THERMAL' # TODO : Is this even a distortion model
 
