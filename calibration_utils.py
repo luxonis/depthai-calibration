@@ -267,7 +267,8 @@ def calibrate_ccm_intrinsics(config: CalibrationConfig, camData: CameraData, boa
 def calibrate_stereo_perspective(config: CalibrationConfig, obj_pts,
                                  allLeftCorners, allRightCorners,
                                  leftCamData: CameraData,
-                                 rightCamData: CameraData):
+                                 rightCamData: CameraData,
+                                 refine_intrinsics=False):
   cameraMatrix_l, distCoeff_l, cameraMatrix_r, distCoeff_r, left_distortion_model = leftCamData[
       'intrinsics'], leftCamData['dist_coeff'], rightCamData[
           'intrinsics'], rightCamData['dist_coeff'], leftCamData[
@@ -284,7 +285,8 @@ def calibrate_stereo_perspective(config: CalibrationConfig, obj_pts,
   flags = 0
   # flags |= cv2.CALIB_USE_EXTRINSIC_GUESS
   # print(flags)
-  flags = cv2.CALIB_FIX_INTRINSIC
+  flags = cv2.CALIB_USE_INTRINSIC_GUESS if refine_intrinsics else cv2.CALIB_FIX_INTRINSIC
+  image_size = leftCamData['size'] if refine_intrinsics else None
   distortion_flags = get_distortion_flags(left_distortion_model)
   flags += distortion_flags
   # print(flags)
@@ -296,7 +298,7 @@ def calibrate_stereo_perspective(config: CalibrationConfig, obj_pts,
       distCoeff_l,
       cameraMatrix_r,
       distCoeff_r,
-      None,
+      image_size,
       R=r_in,
       T=t_in,
       criteria=config.stereoCalibCriteria,
@@ -330,11 +332,20 @@ def calibrate_stereo_perspective(config: CalibrationConfig, obj_pts,
           distCoeff_l,
           cameraMatrix_r,
           distCoeff_r,
-          None,
+          image_size,
           R=r_in,
           T=t_in,
           criteria=config.stereoCalibCriteria,
           flags=flags)
+
+  # Return updated camera data explicitly: this function runs in a worker.
+  if refine_intrinsics:
+    leftCamData['intrinsics'], leftCamData['dist_coeff'] = M1, d1
+    rightCamData['intrinsics'], rightCamData['dist_coeff'] = M2, d2
+    if per_view_errors is not None:
+      weights = [len(points) for points in obj_pts]
+      camera_errors = np.sqrt(np.average(per_view_errors ** 2, axis=0, weights=weights))
+      leftCamData['reprojection_error'], rightCamData['reprojection_error'] = camera_errors.tolist()
 
   r_euler = Rotation.from_matrix(R).as_euler('xyz', degrees=True)
   print(f'Epipolar error is {ret}')
@@ -344,14 +355,14 @@ def calibrate_stereo_perspective(config: CalibrationConfig, obj_pts,
   print(f'Euler angles in XYZ {r_euler} degs')
 
   R_l, R_r, P_l, P_r, Q, validPixROI1, validPixROI2 = cv2.stereoRectify(
-      cameraMatrix_l, distCoeff_l, cameraMatrix_r, distCoeff_r, None, R,
+      M1, d1, M2, d2, image_size, R,
       T)  # , alpha=0.1
   # self.P_l = P_l
   # self.P_r = P_r
   r_euler = Rotation.from_matrix(R_l).as_euler('xyz', degrees=True)
   r_euler = Rotation.from_matrix(R_r).as_euler('xyz', degrees=True)
 
-  return [ret, R, T, R_l, R_r, P_l, P_r]
+  return [ret, R, T, R_l, R_r, P_l, P_r], leftCamData, rightCamData
 
 
 @parallel_function
@@ -1198,7 +1209,16 @@ def calibrate_camera(config,
       camData = calibrate_ccm_intrinsics(
           config, camData, dataset.board)  # TODO : Not a parallel function
 
-  for left, right in extrinsicPairs:
+  stereo = board_config.get('stereo_config', {})
+  stereo_names = {board_config['cameras'][stereo[key]]['name']
+                  for key in ('left_cam', 'right_cam') if key in stereo}
+  # Fit the primary stereo intrinsics first. Dependent pairs use the result
+  # with fixed intrinsics, so shared cameras retain one consistent model.
+  ordered_pairs = [pair for pair in extrinsicPairs
+                   if {pair[0].name, pair[1].name} == stereo_names] + [
+                     pair for pair in extrinsicPairs
+                     if {pair[0].name, pair[1].name} != stereo_names]
+  for left, right in ordered_pairs:
     left_cam_info = camInfos[left.id]
     right_cam_info = camInfos[right.id]
     leftCorners, leftIds = filteredCharucos[left.id]
@@ -1226,11 +1246,13 @@ def calibrate_camera(config,
           left_cam_info, right_cam_info)
     else:
       if camera_model == 'perspective':
-        extrinsics = calibrate_stereo_perspective(config, obj_pts,
+        extrinsics, left_cam_info, right_cam_info = calibrate_stereo_perspective(config, obj_pts,
                                                   left_corners_sampled,
                                                   right_corners_sampled,
                                                   left_cam_info,
-                                                  right_cam_info)
+                                                  right_cam_info,
+                                                  {left.name, right.name} == stereo_names)
+        camInfos[right.id] = right_cam_info
       elif camera_model == 'fisheye':
         extrinsics = calibrate_stereo_fisheye(config, obj_pts,
                                               left_corners_sampled,
