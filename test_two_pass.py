@@ -5,7 +5,7 @@ from unittest.mock import patch
 import cv2
 import numpy as np
 from . import calibration_utils as u
-from .lens_validation import validate_perspective_lens
+from .lens_validation import validate_perspective_lens, dependent_lens_fallback
 
 
 class LensTests(unittest.TestCase):
@@ -20,6 +20,33 @@ class LensTests(unittest.TestCase):
         audit = validate_perspective_lens(K, [-.5,0,0,0,0], (1280,800))
         self.assertFalse(audit['valid'])
         self.assertGreater(audit['roundtripFailures'], 0)
+
+
+class LensFallbackTests(unittest.TestCase):
+    def setUp(self):
+        self.config={'cameras':{'A':{'name':'color','calib_model':'perspective_TILTED'},
+            'B':{'name':'left','calib_model':'perspective_TILTED'},
+            'C':{'name':'right','calib_model':'perspective_TILTED'}},
+            'stereo_config':{'left_cam':'B','right_cam':'C'}}
+
+    def test_only_invalid_dependent_model_is_simplified(self):
+        changed, log=dependent_lens_fallback(self.config,{'A':{'valid':False},'B':{'valid':True},'C':{'valid':True}})
+        self.assertEqual(changed['cameras']['A']['calib_model'],'perspective_RATIONAL')
+        self.assertEqual(changed['cameras']['B'],self.config['cameras']['B'])
+        self.assertEqual(changed['cameras']['C'],self.config['cameras']['C'])
+        self.assertEqual(self.config['cameras']['A']['calib_model'],'perspective_TILTED')
+        self.assertEqual(log[0]['camera'],'color')
+
+    def test_invalid_primary_model_never_chooses_a_depth_tuned_fallback(self):
+        changed, log=dependent_lens_fallback(self.config,{'B':{'valid':False}})
+        self.assertIsNone(changed)
+        self.assertEqual(log,[])
+
+    def test_rational_retry_failure_is_not_silently_accepted(self):
+        self.config['cameras']['A']['calib_model']='perspective_RATIONAL'
+        changed,log=dependent_lens_fallback(self.config,{'A':{'valid':False}})
+        self.assertIsNone(changed)
+        self.assertEqual(log,[])
 
 
 class CornerTests(unittest.TestCase):

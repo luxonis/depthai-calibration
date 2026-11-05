@@ -45,3 +45,31 @@ def validate_perspective_lens(K, D, size, maximum_roundtrip_px=1.0):
             'maximumAllowedRoundtripPx': maximum_roundtrip_px,
             'rationalPolesWithinSensorRadiusSquared': poles,
             'basis': 'Full native sensor grid; sampled lens geometry only'}
+
+
+def dependent_lens_fallback(board_config, audits):
+    """Simplify an invalid dependent camera without changing stereo models.
+
+    Model selection uses optical invertibility only, never depth statistics.
+    Invalid primary stereo models always fail instead of choosing a profile
+    against the evaluation target. The rational model is the single supported retry.
+    """
+    import copy
+    stereo = board_config.get('stereo_config', {})
+    primary = {stereo.get('left_cam'), stereo.get('right_cam')}
+    bad = [socket for socket,audit in audits.items() if not audit['valid']]
+    if not bad or any(socket in primary for socket in bad):
+        return None, []
+    candidate = copy.deepcopy(board_config)
+    changes = []
+    for socket in bad:
+        camera = candidate['cameras'][socket]
+        previous = camera.get('calib_model', '')
+        if previous == 'perspective_TILTED':
+            selected = 'perspective_RATIONAL'
+        else:
+            return None, []
+        camera['calib_model'] = selected
+        changes.append({'camera':camera['name'], 'from':previous, 'to':selected,
+                        'rejectedLensAudit':audits[socket]})
+    return candidate, changes
