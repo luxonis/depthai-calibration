@@ -1,4 +1,5 @@
 from .worker import parallel_function, ParallelFunction
+from .lens_validation import validate_perspective_lens
 from scipy.spatial.transform import Rotation
 from typing import List, Tuple
 from itertools import chain
@@ -104,6 +105,51 @@ def detect_charuco_board(image: np.array, board: CharucoBoard):
 
 
 @parallel_function
+def redetect_calibrated_corners(camData: CameraData, dataset: Dataset):
+  """Second optical pass, seeded only by this dataset's first-pass K/D.
+
+  Keep one entry per input image, in the original order. A failed detection
+  aborts calibration rather than silently pairing different stereo captures.
+  No depth observations or previous EEPROM calibration enter this pass.
+  """
+  corners, ids = [], []
+  params = cv2.aruco.DetectorParameters_create()
+  params.minMarkerDistanceRate = 0.01
+  for index, image in enumerate(dataset.images):
+    markers, marker_ids, rejected = cv2.aruco.detectMarkers(
+        image, dataset.board.dictionary, parameters=params)
+    markers, marker_ids, _, _ = cv2.aruco.refineDetectedMarkers(
+        image, dataset.board.board, markers, marker_ids, rejected)
+    if marker_ids is None:
+      raise RuntimeError(f'{dataset.name} capture {index}: no second-pass markers')
+    _, c, i = cv2.aruco.interpolateCornersCharuco(
+        markers, marker_ids, image, dataset.board.board,
+        cameraMatrix=camData['intrinsics'], distCoeffs=camData['dist_coeff'],
+        minMarkers=2)
+    if c is None or i is None or len(c) < 12:
+      raise RuntimeError(f'{dataset.name} capture {index}: fewer than 12 second-pass corners')
+    c = cv2.cornerSubPix(image, c, (5, 5), (-1, -1),
+                        (cv2.TERM_CRITERIA_COUNT | cv2.TERM_CRITERIA_EPS, 100, 1e-5))
+    corners.append(c)
+    ids.append(i.astype(np.int32))
+  return corners, ids
+
+
+@parallel_function
+def refit_calibrated_corners(config: CalibrationConfig, camData: CameraData, dataset: Dataset):
+  corners, ids = redetect_calibrated_corners(camData, dataset)
+  # The first-pass solution seeds localization only. Restart the optical fit
+  # with the same nominal model/filtering as the normal first pass; otherwise
+  # the second pass can inherit an underconstrained rational branch.
+  camData = get_features(config, camData)
+  filtered = [estimate_pose_and_filter(camData, c, i, dataset.board)
+              for c, i in zip(corners, ids)]
+  camData = calibrate_charuco(camData, [x[0] for x in filtered],
+                             [x[1] for x in filtered], dataset)
+  return calibrate_ccm_intrinsics_per_ccm(config, camData, dataset)
+
+
+@parallel_function
 def get_features(config: CalibrationConfig, camData: CameraData) -> CameraData:
   f = camData['size'][0] / (2 * np.tan(np.deg2rad(camData["hfov"] / 2)))
 
@@ -163,7 +209,7 @@ def calibrate_charuco(camData: CameraData, allCorners, allIds,
        cameraMatrix=camData['intrinsics'],
        distCoeffs=camData['dist_coeff'],
        flags=flags,
-       criteria=(cv2.TERM_CRITERIA_EPS & cv2.TERM_CRITERIA_COUNT, 1000, 1e-6))
+       criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 300, 1e-9))
   #except:
   #  return f"First intrinsic calibration failed for {cam_info['size']}", None, None
 
@@ -989,7 +1035,7 @@ def calibrate_camera_charuco(allCorners, allIds, imsize, distortion_flags,
              cameraMatrix=cameraIntrinsics,
              distCoeffs=distCoeff,
              flags=flags,
-             criteria=(cv2.TERM_CRITERIA_EPS & cv2.TERM_CRITERIA_COUNT, 50000,
+             criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 300,
                        1e-9))
       except:
         print('failed on dataset', dataset.name)
@@ -1144,7 +1190,7 @@ def calibrate_camera(config,
   filteredCharucos = {}
 
   # Compile a list of unique datasets
-  uniqueDatasets = intrinsicCameras
+  uniqueDatasets = list(intrinsicCameras)
   for dataset in chain(*extrinsicPairs):
     if dataset not in uniqueDatasets:
       uniqueDatasets.append(dataset)
@@ -1203,6 +1249,8 @@ def calibrate_camera(config,
       camData = calibrate_charuco(camData, corners, ids, dataset)
       camData, corners, ids = calibrate_ccm_intrinsics_per_ccm(
           config, camData, dataset)
+      if config.twoPassCorners and calib_model == 'perspective' and dataset.enableFiltering:
+        camData, corners, ids = refit_calibrated_corners(config, camData, dataset)
       camInfos[dataset.id] = camData
       filteredCharucos[dataset.id] = [corners, ids]
     else:
@@ -1251,7 +1299,7 @@ def calibrate_camera(config,
                                                   right_corners_sampled,
                                                   left_cam_info,
                                                   right_cam_info,
-                                                  {left.name, right.name} == stereo_names)
+                                                  config.jointStereoIntrinsics and {left.name, right.name} == stereo_names)
         camInfos[right.id] = right_cam_info
       elif camera_model == 'fisheye':
         extrinsics = calibrate_stereo_fisheye(config, obj_pts,
@@ -1277,11 +1325,16 @@ class StereoCalibration(object):
                 extrinsicPairs: List[Tuple[Dataset, Dataset]] = [],
                 initial_max_threshold=15,
                 initial_min_filtered=0.05,
-                debug: bool = False):
+                debug: bool = False,
+                two_pass_corners: bool = True,
+                joint_stereo_intrinsics: bool = True):
     """Function to calculate calibration for stereo camera."""
     config = CalibrationConfig(
         initial_max_threshold, initial_min_filtered, camera_model,
         (cv2.TERM_CRITERIA_COUNT + cv2.TERM_CRITERIA_EPS, 300, 1e-9))
+
+    config.twoPassCorners = two_pass_corners
+    config.jointStereoIntrinsics = joint_stereo_intrinsics
 
     for a, b in extrinsicPairs:
       if len(a.allIds) != len(b.allIds):
@@ -1313,6 +1366,17 @@ class StereoCalibration(object):
     for stereoConfig in stereoConfigs:
       if stereoConfig:
         board_config['stereo_config'].update(stereoConfig)
+
+    # Validate the final models, after the joint stereo update, before a
+    # caller can build or flash an EEPROM. Reprojection RMS alone cannot
+    # detect rational poles or peripheral folds.
+    for camera in board_config['cameras'].values():
+      if camera.get('calib_model') == 'perspective' and 'intrinsics' in camera:
+        camera['lens_validation'] = validate_perspective_lens(
+            camera['intrinsics'], camera['dist_coeff'], camera['size'])
+        if not camera['lens_validation']['valid']:
+          raise RuntimeError(f"Invalid full-sensor lens mapping for {camera['name']}: "
+                             f"{camera['lens_validation']}")
 
     if debug:
       return stereoConfigs, allExtrinsics, board_config, camInfos, filteredCharucos
