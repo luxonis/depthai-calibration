@@ -123,6 +123,8 @@ class CalibrationConfig:
     self.initialMinFiltered = initialMinFiltered
     self.cameraModel = cameraModel
     self.stereoCalibCriteria = stereoCalibCriteria
+    # Opt-in optical stereo refinement; never enabled implicitly for other callers.
+    self.stereoRefinement = False
 
 class CameraData(TypedDict):
   calib_model: CalibrationModel

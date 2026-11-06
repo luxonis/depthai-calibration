@@ -1,3 +1,10 @@
+"""Optical fitting with optional stereo refinement for spatial depth uniformity.
+
+The opt-in path lets both stereo lens models and their relative pose agree
+in OpenCV's existing stereo solve. The mono fit and corner detector are unchanged.
+Depth measurements never enter these fits. Dependent camera poses are solved
+last with the final lens models fixed, preserving RGB/depth geometry.
+"""
 from .worker import parallel_function, ParallelFunction
 from scipy.spatial.transform import Rotation
 from typing import List, Tuple
@@ -101,6 +108,29 @@ def detect_charuco_board(image: np.array, board: CharucoBoard):
     return corners, ids
   else:
     raise RuntimeError('Failed to detect corners on image')
+
+
+@parallel_function
+def update_mono_reprojection_error(camData: CameraData, corners, ids, dataset: Dataset):
+  """Re-evaluate the final K/D on all mono observations, preserving the old
+  point-RMS quality-check basis instead of substituting stereo common-point RMS.
+  This measures optical fit quality; depth uniformity is validated separately.
+  """
+  squared_error = 0.
+  count = 0
+  for points, point_ids in zip(corners, ids):
+    objects = dataset.board.board.chessboardCorners[np.asarray(point_ids).reshape(-1)]
+    ok, rotation, translation = cv2.solvePnP(objects, points, camData['intrinsics'], camData['dist_coeff'])
+    if not ok:
+      raise RuntimeError(f'{dataset.name}: final mono pose could not be evaluated')
+    projected = cv2.projectPoints(objects, rotation, translation,
+                                  camData['intrinsics'], camData['dist_coeff'])[0]
+    squared_error += np.sum((projected.reshape(-1, 2)-np.asarray(points).reshape(-1, 2))**2)
+    count += len(points)
+  if count == 0:
+    raise RuntimeError(f'{dataset.name}: no final mono observations')
+  camData['reprojection_error'] = float(np.sqrt(squared_error / count))
+  return camData
 
 
 @parallel_function
@@ -268,7 +298,8 @@ def calibrate_ccm_intrinsics(config: CalibrationConfig, camData: CameraData, boa
 def calibrate_stereo_perspective(config: CalibrationConfig, obj_pts,
                                  allLeftCorners, allRightCorners,
                                  leftCamData: CameraData,
-                                 rightCamData: CameraData):
+                                 rightCamData: CameraData,
+                                 refine_intrinsics=False):
   cameraMatrix_l, distCoeff_l, cameraMatrix_r, distCoeff_r, left_distortion_model = leftCamData[
       'intrinsics'], leftCamData['dist_coeff'], rightCamData[
           'intrinsics'], rightCamData['dist_coeff'], leftCamData[
@@ -285,7 +316,8 @@ def calibrate_stereo_perspective(config: CalibrationConfig, obj_pts,
   flags = 0
   # flags |= cv2.CALIB_USE_EXTRINSIC_GUESS
   # print(flags)
-  flags = cv2.CALIB_FIX_INTRINSIC
+  flags = cv2.CALIB_USE_INTRINSIC_GUESS if refine_intrinsics else cv2.CALIB_FIX_INTRINSIC
+  image_size = leftCamData['size'] if refine_intrinsics else None
   distortion_flags = get_distortion_flags(left_distortion_model)
   flags += distortion_flags
   # print(flags)
@@ -297,7 +329,7 @@ def calibrate_stereo_perspective(config: CalibrationConfig, obj_pts,
       distCoeff_l,
       cameraMatrix_r,
       distCoeff_r,
-      None,
+      image_size,
       R=r_in,
       T=t_in,
       criteria=config.stereoCalibCriteria,
@@ -331,11 +363,16 @@ def calibrate_stereo_perspective(config: CalibrationConfig, obj_pts,
           distCoeff_l,
           cameraMatrix_r,
           distCoeff_r,
-          None,
+          image_size,
           R=r_in,
           T=t_in,
           criteria=config.stereoCalibCriteria,
           flags=flags)
+
+  # Return updated camera data explicitly: this function runs in a worker.
+  if refine_intrinsics:
+    leftCamData['intrinsics'], leftCamData['dist_coeff'] = M1, d1
+    rightCamData['intrinsics'], rightCamData['dist_coeff'] = M2, d2
 
   r_euler = Rotation.from_matrix(R).as_euler('xyz', degrees=True)
   print(f'Epipolar error is {ret}')
@@ -345,14 +382,14 @@ def calibrate_stereo_perspective(config: CalibrationConfig, obj_pts,
   print(f'Euler angles in XYZ {r_euler} degs')
 
   R_l, R_r, P_l, P_r, Q, validPixROI1, validPixROI2 = cv2.stereoRectify(
-      cameraMatrix_l, distCoeff_l, cameraMatrix_r, distCoeff_r, None, R,
+      M1, d1, M2, d2, image_size, R,
       T)  # , alpha=0.1
   # self.P_l = P_l
   # self.P_r = P_r
   r_euler = Rotation.from_matrix(R_l).as_euler('xyz', degrees=True)
   r_euler = Rotation.from_matrix(R_r).as_euler('xyz', degrees=True)
 
-  return [ret, R, T, R_l, R_r, P_l, P_r]
+  return [ret, R, T, R_l, R_r, P_l, P_r], leftCamData, rightCamData
 
 
 @parallel_function
@@ -1134,10 +1171,28 @@ def calibrate_camera(config,
   filteredCharucos = {}
 
   # Compile a list of unique datasets
-  uniqueDatasets = intrinsicCameras
+  uniqueDatasets = list(intrinsicCameras)
   for dataset in chain(*extrinsicPairs):
     if dataset not in uniqueDatasets:
       uniqueDatasets.append(dataset)
+
+  stereo = board_config.get('stereo_config', {})
+  stereo_names = {board_config['cameras'][stereo[key]]['name']
+                  for key in ('left_cam', 'right_cam')
+                  if stereo.get(key) in board_config['cameras']}
+  # Scope the optional path to a complete perspective optical stereo pair.
+  # Single-camera, fisheye and unfiltered thermal datasets keep their old path.
+  refine_names = set()
+  if config.stereoRefinement and camera_model == 'perspective' and len(stereo_names) == 2:
+    for a, b in extrinsicPairs:
+      if {a.name, b.name} == stereo_names and a.enableFiltering and b.enableFiltering:
+        models = [c.get('calib_model', camera_model).split('_')[0]
+                  for c in board_config['cameras'].values() if c['name'] in stereo_names]
+        if all(model == 'perspective' for model in models):
+          refine_names = stereo_names
+  board_config['stereo_refinement'] = {
+      'requested': config.stereoRefinement, 'applied': bool(refine_names),
+      'primaryCameras': sorted(refine_names), 'dependentIntrinsicsRefined': False}
 
   # Calibrate camera intrinsics for all provided datasets
   for dataset in uniqueDatasets:
@@ -1199,7 +1254,15 @@ def calibrate_camera(config,
       camData = calibrate_ccm_intrinsics(
           config, camData, dataset.board)  # TODO : Not a parallel function
 
-  for left, right in extrinsicPairs:
+  # Existing RGB/dependent-pair solves run after the primary stereo update.
+  # Their intrinsics remain fixed: there must be one final model per camera.
+  ordered_pairs = list(extrinsicPairs)
+  if refine_names:
+    ordered_pairs = [pair for pair in extrinsicPairs
+                     if {pair[0].name, pair[1].name} == refine_names] + [
+                       pair for pair in extrinsicPairs
+                       if {pair[0].name, pair[1].name} != refine_names]
+  for left, right in ordered_pairs:
     left_cam_info = camInfos[left.id]
     right_cam_info = camInfos[right.id]
     leftCorners, leftIds = filteredCharucos[left.id]
@@ -1227,11 +1290,18 @@ def calibrate_camera(config,
           left_cam_info, right_cam_info)
     else:
       if camera_model == 'perspective':
-        extrinsics = calibrate_stereo_perspective(config, obj_pts,
+        extrinsics, left_cam_info, right_cam_info = calibrate_stereo_perspective(config, obj_pts,
                                                   left_corners_sampled,
                                                   right_corners_sampled,
                                                   left_cam_info,
-                                                  right_cam_info)
+                                                  right_cam_info,
+                                                  bool(refine_names) and {left.name, right.name} == refine_names)
+        if refine_names and {left.name, right.name} == refine_names:
+          left_cam_info = update_mono_reprojection_error(
+              left_cam_info, filteredCharucos[left.id][0], filteredCharucos[left.id][1], left)
+          right_cam_info = update_mono_reprojection_error(
+              right_cam_info, filteredCharucos[right.id][0], filteredCharucos[right.id][1], right)
+        camInfos[right.id] = right_cam_info
       elif camera_model == 'fisheye':
         extrinsics = calibrate_stereo_fisheye(config, obj_pts,
                                               left_corners_sampled,
@@ -1256,11 +1326,14 @@ class StereoCalibration(object):
                 extrinsicPairs: List[Tuple[Dataset, Dataset]] = [],
                 initial_max_threshold=15,
                 initial_min_filtered=0.05,
-                debug: bool = False):
+                debug: bool = False,
+                stereo_refinement: bool = False):
     """Function to calculate calibration for stereo camera."""
     config = CalibrationConfig(
         initial_max_threshold, initial_min_filtered, camera_model,
         (cv2.TERM_CRITERIA_COUNT + cv2.TERM_CRITERIA_EPS, 300, 1e-9))
+
+    config.stereoRefinement = stereo_refinement
 
     for a, b in extrinsicPairs:
       if len(a.allIds) != len(b.allIds):
