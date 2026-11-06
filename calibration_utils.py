@@ -1328,7 +1328,8 @@ class StereoCalibration(object):
                 initial_min_filtered=0.05,
                 debug: bool = False,
                 two_pass_corners: bool = True,
-                joint_stereo_intrinsics: bool = True):
+                joint_stereo_intrinsics: bool = True,
+                enforce_lens_validation: bool = True):
     """Function to calculate calibration for stereo camera."""
     original_board_config = copy.deepcopy(board_config)
     config = CalibrationConfig(
@@ -1378,14 +1379,18 @@ class StereoCalibration(object):
         camera['lens_validation'] = validate_perspective_lens(
             camera['intrinsics'], camera['dist_coeff'], camera['size'])
         audits[socket] = camera['lens_validation']
-    if any(not audit['valid'] for audit in audits.values()):
+    invalid_lens = any(not audit['valid'] for audit in audits.values())
+    if not enforce_lens_validation:
+      board_config['lens_validation_bypassed'] = True
+      print(f'Investigation override: lens rejection disabled; unchanged audits: {audits}')
+    if invalid_lens and enforce_lens_validation:
       fallback_config, changes = dependent_lens_fallback(original_board_config, audits)
       if fallback_config is None:
         raise RuntimeError(f'Invalid full-sensor lens mapping: {audits}')
       print(f'Refitting invalid dependent-camera lens models: {changes}')
       result = self.calibrate(fallback_config, camera_model, intrinsicCameras,
           extrinsicPairs, initial_max_threshold, initial_min_filtered, debug,
-          two_pass_corners, joint_stereo_intrinsics)
+          two_pass_corners, joint_stereo_intrinsics, enforce_lens_validation)
       final_config = result[2] if debug else result[0]
       final_config['lens_model_fallbacks'] = changes + final_config.get('lens_model_fallbacks', [])
       return result

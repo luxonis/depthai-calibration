@@ -22,6 +22,26 @@ class LensTests(unittest.TestCase):
         self.assertGreater(audit['roundtripFailures'], 0)
 
 
+class LensOverrideTests(unittest.TestCase):
+    def test_experiment_keeps_failed_audit_and_default_still_rejects(self):
+        board = {'cameras': {'B': {'name': 'left', 'calib_model': 'perspective',
+            'intrinsics': np.array([[570.,0,640],[0,570.,400],[0,0,1]]),
+            'dist_coeff': [-.5,0,0,0,0], 'size': (1280,800)}},
+            'stereo_config': {'left_cam':'B','right_cam':'C'}}
+        def fitted(*args):
+            return copy.deepcopy(board), {}, [], {}, []
+        with patch.object(u.calibrate_camera, 'run_parallel', side_effect=fitted):
+            with self.assertRaisesRegex(RuntimeError, 'Invalid full-sensor lens mapping'):
+                u.StereoCalibration().calibrate(copy.deepcopy(board), 'perspective')
+            config, _ = u.StereoCalibration().calibrate(copy.deepcopy(board), 'perspective',
+                                                       enforce_lens_validation=False)
+        self.assertTrue(config['lens_validation_bypassed'])
+        self.assertFalse(config['cameras']['B']['lens_validation']['valid'])
+        self.assertGreater(config['cameras']['B']['lens_validation']['roundtripFailures'], 0)
+        np.testing.assert_array_equal(config['cameras']['B']['intrinsics'], board['cameras']['B']['intrinsics'])
+        self.assertEqual(config['cameras']['B']['dist_coeff'], board['cameras']['B']['dist_coeff'])
+
+
 class LensFallbackTests(unittest.TestCase):
     def setUp(self):
         self.config={'cameras':{'A':{'name':'color','calib_model':'perspective_TILTED'},
