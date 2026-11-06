@@ -163,7 +163,8 @@ def calibrate_charuco(camData: CameraData, allCorners, allIds,
        cameraMatrix=camData['intrinsics'],
        distCoeffs=camData['dist_coeff'],
        flags=flags,
-       criteria=(cv2.TERM_CRITERIA_EPS & cv2.TERM_CRITERIA_COUNT, 1000, 1e-6))
+       # COUNT & EPS is zero and does not enable either termination condition.
+       criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 300, 1e-9))
   #except:
   #  return f"First intrinsic calibration failed for {cam_info['size']}", None, None
 
@@ -978,7 +979,7 @@ def calibrate_camera_charuco(allCorners, allIds, imsize, distortion_flags,
              cameraMatrix=cameraIntrinsics,
              distCoeffs=distCoeff,
              flags=flags,
-             criteria=(cv2.TERM_CRITERIA_EPS & cv2.TERM_CRITERIA_COUNT, 50000,
+             criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 300,
                        1e-9))
       except:
         print('failed on dataset', dataset.name)
