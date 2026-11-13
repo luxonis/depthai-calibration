@@ -6,6 +6,7 @@ from .types import *
 import numpy as np
 import time
 import cv2
+import copy
 
 PER_CCM = True
 EXTRINSICS_PER_CCM = False
@@ -146,11 +147,13 @@ def calibrate_charuco(camData: CameraData, allCorners, allIds,
   allCorners2 = []
   allIds2 = []
 
-  for corners, ids in zip(allCorners, allIds):
+  view_indices = []
+  for view_index, (corners, ids) in enumerate(zip(allCorners, allIds)):
     if len(ids) < 6:
       continue
     allCorners2.append(corners)
     allIds2.append(ids)
+    view_indices.append(view_index)
 
   #try:
   (ret, camera_matrix, distortion_coefficients, rotation_vectors,
@@ -171,6 +174,7 @@ def calibrate_charuco(camData: CameraData, allCorners, allIds,
   camData['dist_coeff'] = distortion_coefficients
   camData['filtered_corners'] = allCorners2
   camData['filtered_ids'] = allIds2
+  camData['filtered_view_indices'] = view_indices
   return camData
 
 
@@ -209,10 +213,15 @@ def calibrate_ccm_intrinsics_per_ccm(config: CalibrationConfig,
                                      camData: CameraData, dataset: Dataset):
   start = time.time()
   print('starting calibrate_wf')
-  ret, cameraIntrinsics, distCoeff, _, _, filtered_ids, filtered_corners, size, coverageImage, all_corners, all_ids = calibrate_wf_intrinsics(
+  ret, cameraIntrinsics, distCoeff, rotations, translations, filtered_ids, filtered_corners, size, coverageImage, all_corners, all_ids = calibrate_wf_intrinsics(
       config, camData, dataset)
   if isinstance(ret, str) and all_ids is None:
     raise RuntimeError('Exception' + ret)  # TODO : Handle
+  if camData['calib_model'] == 'perspective' and getattr(dataset, 'readmitInitialObservations', False):
+    ret, cameraIntrinsics, distCoeff, rotations, translations, filtered_ids, filtered_corners = readmit_initial_observations(
+        dataset, camData.get('filtered_view_indices'),
+        (ret, cameraIntrinsics, distCoeff, rotations, translations, filtered_ids, filtered_corners),
+        get_distortion_flags(camData['distortion_model']), all_ids)
   print(f'calibrate_wf took {round(time.time() - start, 2)}s')
 
   camData['intrinsics'] = cameraIntrinsics
@@ -220,6 +229,85 @@ def calibrate_ccm_intrinsics_per_ccm(config: CalibrationConfig,
   camData['reprojection_error'] = ret
   print("Reprojection error of {0}: {1}".format(camData['name'], ret))
   return camData, filtered_corners, filtered_ids
+
+
+def readmit_initial_observations(dataset, view_indices, result, distortion_flags, initial_rough_ids):
+  """Reconsider initial rough rejections using the solved lens and retained poses.
+
+  Admission uses only the existing final pixel gate and poses fitted before the
+  proposed observations were included. Up to two native refits verify admission;
+  a failed mapping, solve, or final gate restores the untouched baseline result.
+  """
+  baseline = copy.deepcopy(result)
+  ret, matrix, distortion, rotations, translations, ids, corners = copy.deepcopy(result)
+  refits = 0
+  try:
+    if view_indices is None or not len(dataset.allCorners):
+      return baseline
+    if not (len(view_indices) == len(ids) == len(corners) == len(rotations) == len(translations) == len(initial_rough_ids)):
+      raise ValueError('Initial-view map and fitted poses have different lengths')
+    original_ids = [np.asarray(i).reshape(-1).copy() for i in ids]
+    threshold = 5 * dataset.imageSize[1] / 800.0
+    proposed_corners, proposed_ids = [], []
+    for index, (view_index, kept_ids, kept_corners) in enumerate(zip(view_indices, ids, corners)):
+      raw = np.asarray(dataset.allCorners[view_index]).reshape(-1, 1, 2)
+      raw_ids = np.asarray(dataset.allIds[view_index]).reshape(-1)
+      kept_ids = np.asarray(kept_ids).reshape(-1)
+      if len(raw) != len(raw_ids) or len(np.unique(raw_ids)) != len(raw_ids):
+        raise ValueError('Initial observation pool has mismatched or duplicate IDs')
+      existing = np.isin(raw_ids, kept_ids)
+      if not np.array_equal(raw_ids[existing], kept_ids) or not np.array_equal(raw[existing], kept_corners):
+        raise ValueError('Fitted observations do not match their original capture entry')
+      rough_ids = np.asarray(initial_rough_ids[index]).reshape(-1)
+      if not np.isin(kept_ids, rough_ids).all():
+        raise ValueError('Fitted observations are absent from the initial rough survivor set')
+      projected = cv2.projectPoints(dataset.board.board.chessboardCorners[raw_ids],
+          rotations[index], translations[index], matrix, distortion)[0].reshape(-1, 2)
+      errors = np.linalg.norm(projected-raw.reshape(-1, 2), axis=1)
+      admitted = ~np.isin(raw_ids, rough_ids) & np.isfinite(errors) & (errors <= threshold)
+      selected = existing | admitted
+      proposed_corners.append(raw[selected].copy())
+      proposed_ids.append(raw_ids[selected].astype(np.int32).reshape(-1, 1))
+    added = sum(len(i)-len(j) for i, j in zip(proposed_ids, ids))
+    if not added:
+      return baseline
+    print(f'Readmission proposed {added} observations for {dataset.name} before refitting')
+
+    for pass_index in range(2):
+      ret, matrix, distortion, rotations, translations, _, _, _ = cv2.aruco.calibrateCameraCharucoExtended(
+          charucoCorners=proposed_corners, charucoIds=proposed_ids,
+          board=dataset.board.board, imageSize=dataset.imageSize,
+          cameraMatrix=matrix.copy(), distCoeffs=distortion.copy(),
+          flags=cv2.CALIB_USE_INTRINSIC_GUESS + distortion_flags,
+          criteria=(cv2.TERM_CRITERIA_EPS & cv2.TERM_CRITERIA_COUNT, 50000, 1e-9))
+      refits += 1
+      if not np.isfinite(matrix).all() or not np.isfinite(distortion).all() or not np.isfinite(ret) or min(matrix[0, 0], matrix[1, 1]) <= 0:
+        raise ValueError('Readmission produced invalid intrinsic parameters')
+      rejected = 0
+      for index, (points, indices) in enumerate(zip(proposed_corners, proposed_ids)):
+        objects = dataset.board.board.chessboardCorners[indices.reshape(-1)]
+        camera_points = objects @ cv2.Rodrigues(rotations[index])[0].T + translations[index].reshape(3)
+        predicted = cv2.projectPoints(objects, rotations[index], translations[index], matrix, distortion)[0].reshape(-1, 2)
+        errors = np.linalg.norm(predicted-points.reshape(-1, 2), axis=1)
+        if not np.isfinite(errors).all() or not np.isfinite(camera_points).all() or (camera_points[:, 2] <= 0).any():
+          raise ValueError('Readmission produced invalid board projections')
+        newly_added = ~np.isin(indices.reshape(-1), original_ids[index])
+        bad = newly_added & (errors > threshold)
+        rejected += int(bad.sum())
+        proposed_corners[index] = points[~bad].copy()
+        proposed_ids[index] = indices[~bad].copy()
+      if not rejected:
+        final_added = sum(len(i)-len(j) for i, j in zip(proposed_ids, ids))
+        print(f'Readmission accepted {final_added}/{added} observations in {refits} native refits')
+        return ret, matrix, distortion, rotations, translations, proposed_ids, proposed_corners
+      if not any(len(i) > len(j) for i, j in zip(proposed_ids, ids)):
+        raise ValueError('No newly admitted observations survived the final pixel gate')
+      if pass_index == 1:
+        raise ValueError('New observations did not satisfy the final pixel gate after refitting')
+    return baseline
+  except (ValueError, IndexError, cv2.error) as error:
+    print(f'Readmission reverted after {refits} native refits: {error}')
+    return baseline
 
 
 def calibrate_ccm_intrinsics(config: CalibrationConfig, camData: CameraData, board: CharucoBoard):
